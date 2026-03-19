@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POGO — Prompt Optimization & Generation Oracle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: #09090B;
+    color: #FAFAFA;
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .root {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 80px 24px 120px;
+  }
+
+  /* --- Animations --- */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(16px);
+    animation: fadeUp 0.6s ease forwards;
+  }
+  .d1 { animation-delay: 0.05s; }
+  .d2 { animation-delay: 0.12s; }
+  .d3 { animation-delay: 0.2s; }
+  .d4 { animation-delay: 0.28s; }
+
+  @keyframes fadeUp {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  @keyframes cursorBlink {
+    0%, 100% { opacity: 0; }
+    50% { opacity: 1; }
+  }
+
+  /* --- Header --- */
+  .brand-label {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #52525B;
+    margin-bottom: 20px;
+  }
+  .brand-title {
+    font-size: 36px;
+    font-weight: 300;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    margin-bottom: 12px;
+    color: #FAFAFA;
+  }
+  .brand-sub {
+    font-size: 15px;
+    color: #52525B;
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  /* --- Model Tabs --- */
+  .model-tabs {
+    display: flex;
+    gap: 24px;
+    border-bottom: 1px solid #18181B;
+    margin-bottom: 40px;
+  }
+  .model-tab {
+    padding: 10px 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #52525B;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    position: relative;
+    transition: color 0.3s ease;
+  }
+  .model-tab:hover { color: #A1A1AA; }
+  .model-tab.active { color: #FAFAFA; }
+  .model-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #FAFAFA;
+  }
+
+  /* --- Task Input --- */
+  .input-area {
+    border-bottom: 1px solid #18181B;
+    padding-bottom: 24px;
+    margin-bottom: 8px;
+  }
+  .task-input {
+    width: 100%;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1.7;
+    background: transparent;
+    border: none;
+    color: #FAFAFA;
+    resize: none;
+    outline: none;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 300;
+    letter-spacing: -0.01em;
+  }
+  .task-input::placeholder { color: #3F3F46; }
+  .hint {
+    font-size: 12px;
+    color: #3F3F46;
+    font-weight: 400;
+    margin-bottom: 32px;
+  }
+
+  /* --- Generate Button --- */
+  .gen-btn {
+    padding: 12px 28px;
+    background: #FAFAFA;
+    color: #09090B;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    letter-spacing: -0.01em;
+    margin-bottom: 48px;
+  }
+  .gen-btn:hover { background: #E4E4E7; transform: translateY(-1px); }
+  .gen-btn:active { transform: translateY(0); }
+  .gen-btn:disabled {
+    background: #27272A;
+    color: #52525B;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .gen-btn .dot {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #52525B;
+    animation: pulse 1s ease infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* --- Loading --- */
+  .shimmer-bar {
+    height: 1px;
+    background: #18181B;
+    border-radius: 1px;
+    overflow: hidden;
+    margin-bottom: 48px;
+  }
+  .shimmer-bar .inner {
+    height: 100%;
+    width: 30%;
+    background: linear-gradient(90deg, transparent, #3F3F46, transparent);
+    animation: shimmer 1.5s ease infinite;
+  }
+
+  /* --- Error --- */
+  .error-box {
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid #371520;
+    color: #F87171;
+    font-size: 14px;
+    font-weight: 400;
+    margin-bottom: 32px;
+  }
+
+  /* --- Result --- */
+  .section-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #3F3F46;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .sources-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .source-pill {
+    padding: 3px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 500;
+    background: #18181B;
+    color: #71717A;
+    border: 1px solid #27272A;
+    letter-spacing: 0.02em;
+  }
+
+  .prompt-card {
+    border: 1px solid #1C1C1F;
+    border-radius: 12px;
+    background: #0C0C0E;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+  .prompt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 20px;
+    border-bottom: 1px solid #1C1C1F;
+  }
+  .copy-btn {
+    padding: 6px 16px;
+    background: transparent;
+    border: 1px solid #27272A;
+    border-radius: 6px;
+    color: #71717A;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .copy-btn:hover { border-color: #52525B; color: #A1A1AA; }
+  .copy-btn.copied { border-color: #3F3F46; color: #A1A1AA; }
+
+  .prompt-body {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: #A1A1AA;
+    white-space: pre-wrap;
+    word-break: break-word;
+    padding: 28px;
+    margin: 0;
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .prompt-body::-webkit-scrollbar { width: 4px; }
+  .prompt-body::-webkit-scrollbar-track { background: transparent; }
+  .prompt-body::-webkit-scrollbar-thumb { background: #27272A; border-radius: 2px; }
+
+  .cursor {
+    display: inline-block;
+    width: 1.5px;
+    height: 15px;
+    background: #71717A;
+    margin-left: 2px;
+    vertical-align: middle;
+    animation: cursorBlink 0.8s step-end infinite;
+  }
+
+  .explanation {
+    font-size: 14px;
+    line-height: 1.8;
+    color: #52525B;
+    white-space: pre-wrap;
+    font-weight: 300;
+    margin-bottom: 24px;
+  }
+  .meta {
+    font-size: 12px;
+    color: #3F3F46;
+    font-weight: 400;
+  }
+
+  /* --- Examples --- */
+  .examples-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .example-btn {
+    padding: 10px 16px;
+    background: transparent;
+    border: 1px solid #1C1C1F;
+    border-radius: 8px;
+    color: #52525B;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    text-align: left;
+    line-height: 1.4;
+  }
+  .example-btn:hover {
+    border-color: #3F3F46;
+    color: #A1A1AA;
+    transform: translateX(4px);
+  }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="root">
+
+  <!-- Header -->
+  <div class="fade-up" style="margin-bottom: 64px;">
+    <p class="brand-label">pogo</p>
+    <h1 class="brand-title">Craft the perfect prompt.</h1>
+    <p class="brand-sub">Grounded in research. Tailored to your model.</p>
+  </div>
+
+  <!-- Model tabs -->
+  <div class="fade-up d1">
+    <div class="model-tabs" id="modelTabs">
+      <button class="model-tab active" data-model="claude">Claude</button>
+      <button class="model-tab" data-model="gpt">GPT</button>
+      <button class="model-tab" data-model="gemini">Gemini</button>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="fade-up d2">
+    <div class="input-area">
+      <textarea class="task-input" id="taskInput" placeholder="Describe your task..." rows="3"></textarea>
+    </div>
+    <p class="hint">⌘ + Enter to generate</p>
+  </div>
+
+  <!-- Generate -->
+  <div class="fade-up d3">
+    <button class="gen-btn" id="genBtn" disabled>Generate</button>
+  </div>
+
+  <!-- Loading -->
+  <div class="shimmer-bar hidden" id="shimmer"><div class="inner"></div></div>
+
+  <!-- Error -->
+  <div class="error-box hidden" id="errorBox"></div>
+
+  <!-- Result -->
+  <div class="hidden" id="resultArea">
+    <div class="sources-row" id="sourcesRow">
+      <span class="section-label" style="margin-right: 4px;">Sources</span>
+    </div>
+
+    <div class="prompt-card">
+      <div class="prompt-header">
+        <span class="section-label">Prompt</span>
+        <button class="copy-btn" id="copyBtn">Copy</button>
+      </div>
+      <pre class="prompt-body" id="promptBody"></pre>
+    </div>
+
+    <div class="hidden" id="explanationArea">
+      <p class="section-label" style="margin-bottom: 12px;">Rationale</p>
+      <div class="explanation" id="explanationBody"></div>
+    </div>
+
+    <div class="meta" id="metaLine"></div>
+  </div>
+
+  <!-- Examples -->
+  <div class="fade-up d4" id="examplesArea">
+    <p class="section-label">Examples</p>
+    <div class="examples-list" id="examplesList">
+      <button class="example-btn">Analyze customer churn data and suggest retention strategies</button>
+      <button class="example-btn">Build a multi-step reasoning agent for complex research</button>
+      <button class="example-btn">Create a secure chatbot resistant to prompt injection</button>
+      <button class="example-btn">Extract structured JSON from unstructured meeting notes</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API_URL = "https://uswe9wlv65.execute-api.us-east-1.amazonaws.com/generate";
+const MODEL_LABELS = { claude: "Claude", gpt: "GPT", gemini: "Gemini" };
+
+let selectedModel = "claude";
+let fullPromptText = "";
+let isLoading = false;
+
+// Elements
+const taskInput = document.getElementById("taskInput");
+const genBtn = document.getElementById("genBtn");
+const shimmer = document.getElementById("shimmer");
+const errorBox = document.getElementById("errorBox");
+const resultArea = document.getElementById("resultArea");
+const sourcesRow = document.getElementById("sourcesRow");
+const promptBody = document.getElementById("promptBody");
+const copyBtn = document.getElementById("copyBtn");
+const explanationArea = document.getElementById("explanationArea");
+const explanationBody = document.getElementById("explanationBody");
+const metaLine = document.getElementById("metaLine");
+const examplesArea = document.getElementById("examplesArea");
+const modelTabs = document.getElementById("modelTabs");
+
+// Model tab clicks
+modelTabs.addEventListener("click", (e) => {
+  const tab = e.target.closest(".model-tab");
+  if (!tab) return;
+  selectedModel = tab.dataset.model;
+  document.querySelectorAll(".model-tab").forEach(t => t.classList.remove("active"));
+  tab.classList.add("active");
+});
+
+// Task input
+taskInput.addEventListener("input", () => {
+  genBtn.disabled = !taskInput.value.trim() || isLoading;
+});
+
+taskInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.metaKey) generate();
+});
+
+// Example clicks
+document.querySelectorAll(".example-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    taskInput.value = btn.textContent;
+    genBtn.disabled = false;
+    taskInput.focus();
+  });
+});
+
+// Copy
+copyBtn.addEventListener("click", () => {
+  navigator.clipboard.writeText(fullPromptText);
+  copyBtn.textContent = "Copied";
+  copyBtn.classList.add("copied");
+  setTimeout(() => {
+    copyBtn.textContent = "Copy";
+    copyBtn.classList.remove("copied");
+  }, 2200);
+});
+
+// Extract prompt from response
+function extractPrompt(text) {
+  const m = text.match(/```(?:xml|json|markdown|text)?\n([\s\S]*?)```/);
+  if (m) return m[1].trim();
+  const i = text.indexOf("<task>");
+  if (i !== -1) return text.substring(i).split("```")[0].trim();
+  return text;
+}
+
+function extractExplanation(text) {
+  const parts = text.split("```");
+  if (parts.length >= 3) return parts.slice(2).join("```").trim();
+  return null;
+}
+
+// Typewriter
+function typewriter(el, text, speed = 8) {
+  return new Promise(resolve => {
+    let i = 0;
+    const cursor = document.createElement("span");
+    cursor.className = "cursor";
+    el.textContent = "";
+    el.appendChild(cursor);
+
+    const id = setInterval(() => {
+      i++;
+      el.textContent = text.slice(0, i);
+      el.appendChild(cursor);
+      if (i >= text.length) {
+        clearInterval(id);
+        cursor.remove();
+        resolve();
+      }
+    }, speed);
+  });
+}
+
+// Generate
+async function generate() {
+  const task = taskInput.value.trim();
+  if (!task || isLoading) return;
+
+  isLoading = true;
+  genBtn.disabled = true;
+  genBtn.innerHTML = '<span class="dot"></span>Generating';
+  shimmer.classList.remove("hidden");
+  errorBox.classList.add("hidden");
+  resultArea.classList.add("hidden");
+  examplesArea.classList.add("hidden");
+
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, model: selectedModel }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      errorBox.textContent = data.error;
+      errorBox.classList.remove("hidden");
+      examplesArea.classList.remove("hidden");
+      return;
+    }
+
+    // Sources
+    sourcesRow.innerHTML = '<span class="section-label" style="margin-right:4px;">Sources</span>';
+    data.sources_used.forEach(s => {
+      const pill = document.createElement("span");
+      pill.className = "source-pill";
+      pill.textContent = s.replace(".pdf", "").replace(".txt", "").replace(/_/g, " ");
+      sourcesRow.appendChild(pill);
+    });
+
+    // Prompt
+    fullPromptText = extractPrompt(data.optimized_prompt);
+    const explanation = extractExplanation(data.optimized_prompt);
+
+    resultArea.classList.remove("hidden");
+    resultArea.style.opacity = "0";
+    resultArea.style.transform = "translateY(16px)";
+    requestAnimationFrame(() => {
+      resultArea.style.transition = "all 0.6s ease";
+      resultArea.style.opacity = "1";
+      resultArea.style.transform = "translateY(0)";
+    });
+
+    await typewriter(promptBody, fullPromptText, 8);
+
+    // Explanation
+    if (explanation) {
+      explanationBody.textContent = explanation;
+      explanationArea.classList.remove("hidden");
+      explanationArea.style.opacity = "0";
+      explanationArea.style.transform = "translateY(12px)";
+      requestAnimationFrame(() => {
+        explanationArea.style.transition = "all 0.5s ease";
+        explanationArea.style.opacity = "1";
+        explanationArea.style.transform = "translateY(0)";
+      });
+    } else {
+      explanationArea.classList.add("hidden");
+    }
+
+    // Meta
+    metaLine.textContent = `${MODEL_LABELS[data.model] || data.model} · ${data.sources_used.length} sources`;
+
+    // Scroll
+    resultArea.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  } catch (e) {
+    errorBox.textContent = "Could not reach POGO. Please try again.";
+    errorBox.classList.remove("hidden");
+    examplesArea.classList.remove("hidden");
+  } finally {
+    isLoading = false;
+    genBtn.disabled = !taskInput.value.trim();
+    genBtn.textContent = "Generate";
+    shimmer.classList.add("hidden");
+  }
+}
+
+genBtn.addEventListener("click", generate);
+</script>
+</body>
+</html>

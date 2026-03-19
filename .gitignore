@@ -1,0 +1,28 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# AWS credentials
+.aws/
+*.pem
+.env
+*.env
+
+# Large files
+pogo/faiss_output/
+faiss_index/
+pogo/documents/*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+/tmp/
+*.zip
