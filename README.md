@@ -48,14 +48,14 @@ User submits:                        POGO returns:
 
 ### AWS Services Used (6)
 
-| Service | Purpose |
-|---------|---------|
-| **S3** (knowledge base) | Stores vector embeddings and chunked research papers |
-| **S3** (static website) | Hosts the web UI |
-| **Bedrock** (Titan Embeddings) | Converts text into vector representations for semantic search |
-| **Bedrock** (Claude 3.5 Haiku) | Generates optimized prompts from research context |
-| **Lambda** | Serverless compute — runs the entire pipeline per request |
-| **API Gateway** | HTTP endpoint that accepts POST requests and routes to Lambda |
+| Service | Purpose | Where in Code |
+|---------|---------|---------------|
+| **S3** (knowledge base) | Stores vector embeddings (`embeddings.npy`) and chunked research text (`chunks.json`) that the Lambda function downloads at invocation time | `lambda/handler.py` — downloads from S3 on cold start; `pogo/scripts/build_index_titan.py` — uploads built index to S3 |
+| **S3** (static website) | Hosts `pogo.html` as a public static website so users can access the UI in a browser | `pogo.html` — the hosted file; configured via `deploy.sh` and S3 website settings |
+| **Bedrock** (Titan Embeddings) | Embeds the user's task description into a vector so it can be compared against the research knowledge base using cosine similarity | `lambda/handler.py` → `get_embedding()` — called on every request; `pogo/scripts/build_index_titan.py` → `embed_with_titan()` — used at index-build time |
+| **Bedrock** (Claude 3.5 Haiku) | Takes the retrieved research context + model profile and generates an optimized, citation-grounded prompt | `lambda/handler.py` → `generate_prompt()` — invoked after vector search returns relevant research |
+| **Lambda** | Serverless compute that runs the full pipeline per request: embed query → vector search → prompt generation | `lambda/handler.py` → `lambda_handler()` — the entry point; packaged and deployed via `deploy.sh` |
+| **API Gateway** (HTTP API) | Exposes a public `POST /generate` endpoint that the browser calls and routes the request to the Lambda function | Created in `deploy.sh`; the endpoint URL is set in `pogo.html` as `API_URL` |
 
 ---
 
@@ -202,12 +202,6 @@ aws s3 mb s3://pogo-web-ui --region us-east-1
 aws s3 website s3://pogo-web-ui --index-document pogo.html
 aws s3 cp pogo.html s3://pogo-web-ui/pogo.html --content-type "text/html"
 ```
-
----
-
-## Cost
-
-Total project cost: **under $5** (Bedrock inference + S3 storage). All services operate within or near free-tier limits for this scale of usage.
 
 ---
 
