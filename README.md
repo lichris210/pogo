@@ -4,7 +4,6 @@ A serverless, research-backed prompt engineering tool built on AWS. POGO takes a
 
 **Live Demo:** http://pogo-web-ui.s3-website-us-east-1.amazonaws.com/pogo.html
 
-**Video Walkthrough:** [YouTube Link]
 
 ---
 
