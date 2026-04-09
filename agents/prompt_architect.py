@@ -94,7 +94,7 @@ def build_messages(
     context: dict,
     format_profile: dict,
     reference_prompts: list[str] | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], str]:
     """Assemble the messages array for a Bedrock API call.
 
     Args:
@@ -111,8 +111,7 @@ def build_messages(
             strings to include as examples.
 
     Returns:
-        A list of message dicts (``[{"role": ..., "content": ...}, ...]``)
-        suitable for the Bedrock Messages API.
+        A tuple of (messages list, system prompt string).
 
     Raises:
         ValueError: If *mode* is not ``"draft"`` or ``"refine"``.
