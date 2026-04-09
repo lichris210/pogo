@@ -1,6 +1,6 @@
 # POGO Architecture
 
-> **POGO** (Prompt Optimization with Grounded Output) is a serverless RAG application that generates optimized LLM prompts grounded in research documentation. A user describes a task and selects a target model; POGO retrieves the most relevant prompt-engineering research and uses Claude 3.5 Haiku to craft a model-specific, research-backed prompt.
+> **POGO** (Prompt Optimization & Generation Oracle) is a serverless RAG application that generates optimized LLM prompts grounded in research documentation. A user describes a task and selects a target model; POGO retrieves the most relevant prompt-engineering research and uses Claude 3.5 Haiku to craft a model-specific, research-backed prompt.
 
 ---
 
@@ -8,17 +8,19 @@
 
 1. [System Overview](#1-system-overview)
 2. [Request Flow](#2-request-flow)
-3. [Lambda Function](#3-lambda-function)
-4. [API Gateway](#4-api-gateway)
-5. [Frontend](#5-frontend)
-6. [Vector Store (S3 + NumPy)](#6-vector-store-s3--numpy)
-7. [Bedrock Calls](#7-bedrock-calls)
-8. [Knowledge Base Sources](#8-knowledge-base-sources)
-9. [Other Infrastructure](#9-other-infrastructure)
-10. [IAM & Permissions](#10-iam--permissions)
-11. [Configuration Reference](#11-configuration-reference)
-12. [Deployment](#12-deployment)
-13. [CI/CD & Version Control](#13-cicd--version-control)
+3. [Project Structure](#3-project-structure)
+4. [Lambda Function](#4-lambda-function)
+5. [API Gateway](#5-api-gateway)
+6. [Frontend](#6-frontend)
+7. [Vector Store (S3 + NumPy)](#7-vector-store-s3--numpy)
+8. [Bedrock Calls](#8-bedrock-calls)
+9. [Knowledge Base Sources](#9-knowledge-base-sources)
+10. [Seed Prompts & v2 Planning](#10-seed-prompts--v2-planning)
+11. [Other Infrastructure](#11-other-infrastructure)
+12. [IAM & Permissions](#12-iam--permissions)
+13. [Configuration Reference](#13-configuration-reference)
+14. [Deployment](#14-deployment)
+15. [CI/CD & Version Control](#15-cicd--version-control)
 
 ---
 
@@ -103,7 +105,53 @@ On **warm** Lambda containers, the S3 reads are skipped — `_embeddings` and `_
 
 ---
 
-## 3. Lambda Function
+## 3. Project Structure
+
+```
+pogo/
+├── lambda/
+│   └── handler.py                      # Lambda function — embed, search, generate
+├── pogo/
+│   ├── documents/                      # Source text files (PDFs excluded via .gitignore)
+│   │   ├── anthropic_guide.txt         #   Anthropic prompt engineering overview
+│   │   ├── anthropic_tutorial.txt      #   Comprehensive Anthropic prompting tutorial
+│   │   ├── dair_guide.txt              #   DAIR.ai prompt engineering guide
+│   │   ├── gemini_multimodal.txt       #   Google Gemini multimodal + prompting guide
+│   │   ├── google_guide.txt            #   Google general LLM prompting guidance
+│   │   └── openai_guide.txt            #   OpenAI prompt engineering best practices
+│   └── scripts/
+│       ├── build_index.py              # Legacy indexer (sentence-transformers + FAISS)
+│       └── build_index_titan.py        # Active indexer (Bedrock Titan + NumPy → S3)
+├── scripts/
+│   └── ingest.py                       # Earliest prototype indexer (sentence-transformers + FAISS, local)
+├── .gitignore
+├── ARCHITECTURE.md                     # This file
+├── PLAN.md                             # v2 multi-agent architecture plan (7 phases)
+├── README.md                           # Project overview, setup, and usage
+├── deploy.sh                           # Lambda + API Gateway deployment script
+├── pogo.html                           # Single-file frontend (HTML + CSS + JS)
+├── prompt_engineering_principles.md    # Distilled research findings for agent prompts
+└── seed_prompts.json                   # 139 curated prompts for v2 prompt database
+```
+
+### File roles
+
+| File / Directory | Role | Status |
+|------------------|------|--------|
+| `lambda/handler.py` | Lambda function — the entire backend | **Active (production)** |
+| `pogo/documents/*.txt` | Knowledge base source documents (6 files, ~378 KB) | **Active** |
+| `pogo/scripts/build_index_titan.py` | Builds S3 index using Bedrock Titan embeddings | **Active** |
+| `pogo/scripts/build_index.py` | Builds FAISS index using local sentence-transformers | Legacy — kept for reference |
+| `scripts/ingest.py` | Earliest prototype indexer (basic FAISS + sentence-transformers) | Deprecated |
+| `deploy.sh` | Creates IAM role, packages Lambda, deploys API Gateway | **Active** |
+| `pogo.html` | Single-file web UI (S3-hosted static site) | **Active** |
+| `PLAN.md` | v2 architecture plan — multi-agent pipeline with 7 phases | Planning document |
+| `prompt_engineering_principles.md` | Research findings distilled into actionable principles | Reference for v2 agent prompts |
+| `seed_prompts.json` | 139 curated prompt examples across 11 categories and 3 models | Seed data for v2 prompt database |
+
+---
+
+## 4. Lambda Function
 
 **Name:** `pogo-prompt-generator`  
 **File:** `lambda/handler.py`  
@@ -118,8 +166,10 @@ On **warm** Lambda containers, the S3 reads are skipped — `_embeddings` and `_
 | Function | Purpose |
 |----------|---------|
 | `lambda_handler(event, context)` | Entry point — parses HTTP body, orchestrates search + generation, returns HTTP response |
+| `get_bedrock()` | Returns cached `boto3.client("bedrock-runtime")` instance (lazy singleton) |
+| `load_resources()` | Downloads `embeddings.npy` + `chunks.pkl` from S3 on first call; caches as globals |
 | `embed_query(text)` | Calls Bedrock Titan Embed v2; returns 256-dim normalized numpy vector |
-| `search(query)` | Loads S3 index on first call (cached globally); computes cosine similarity; returns top-5 chunks |
+| `search(query, top_k)` | Loads S3 index on first call (cached globally); computes cosine similarity; returns top-K chunks |
 | `generate_prompt(task, model, chunks)` | Builds system + user messages; calls Bedrock Claude 3.5 Haiku; returns raw text |
 
 ### Global cold-start cache
@@ -182,7 +232,7 @@ NumPy must be bundled in the deployment ZIP (it is not available in the default 
 
 ---
 
-## 4. API Gateway
+## 5. API Gateway
 
 **Type:** HTTP API (API Gateway v2)  
 **Name:** `pogo-api`  
@@ -217,9 +267,9 @@ https://<api-id>.execute-api.us-east-1.amazonaws.com/generate
 
 ---
 
-## 5. Frontend
+## 6. Frontend
 
-**File:** `pogo.html` (single file, ~400 lines)  
+**File:** `pogo.html` (single file, ~582 lines)  
 **Framework:** None — pure HTML + CSS + vanilla JavaScript  
 **Hosting:** S3 static website (`pogo-web-ui` bucket)  
 **Dependencies:** Zero npm packages
@@ -284,7 +334,7 @@ fetch(API_URL, {
 
 ---
 
-## 6. Vector Store (S3 + NumPy)
+## 7. Vector Store (S3 + NumPy)
 
 POGO uses **no dedicated vector database**. Instead, embeddings and chunk metadata are stored as binary files in S3 and loaded into Lambda memory for in-process similarity search.
 
@@ -334,12 +384,12 @@ return [chunks[i] for i in top_indices]
 | Script | Purpose | Notes |
 |--------|---------|-------|
 | `pogo/scripts/build_index_titan.py` | **Active.** Builds S3 index using Bedrock Titan | Current production approach |
-| `pogo/scripts/build_index.py` | Legacy. Uses FAISS + sentence-transformers | Kept for reference; not used in Lambda |
-| `pogo/scripts/ingest.py` | Deprecated. Local sentence-transformers only | Earliest prototype |
+| `pogo/scripts/build_index.py` | Legacy. Uses FAISS + sentence-transformers locally | Kept for reference; not used in Lambda |
+| `scripts/ingest.py` | Deprecated. Earliest prototype (FAISS + sentence-transformers) | Superseded by `build_index_titan.py` |
 
 ---
 
-## 7. Bedrock Calls
+## 8. Bedrock Calls
 
 All Bedrock calls go through a single `boto3.client("bedrock-runtime", region_name="us-east-1")` instance cached at module scope in the Lambda.
 
@@ -380,26 +430,97 @@ result = json.loads(response["body"].read())
 
 ---
 
-## 8. Knowledge Base Sources
+## 9. Knowledge Base Sources
 
 All source documents live in `pogo/documents/` (text files committed to git; PDFs excluded via `.gitignore`).
 
-| File | Lines | Topic |
-|------|-------|-------|
-| `anthropic_guide.txt` | ~50 | Anthropic prompt engineering overview |
-| `anthropic_tutorial.txt` | ~1,881 | Comprehensive Anthropic prompting tutorial with examples |
-| `dair_guide.txt` | ~40 | DAIR.ai prompt engineering guide |
-| `gemini_multimodal.txt` | ~1,372 | Google Gemini multimodal + prompting guide |
-| `google_guide.txt` | ~564 | Google general LLM prompting guidance |
-| `openai_guide.txt` | ~661 | OpenAI prompt engineering best practices |
+| File | Lines | Size | Topic |
+|------|-------|------|-------|
+| `anthropic_guide.txt` | 50 | 2.3 KB | Anthropic prompt engineering overview |
+| `anthropic_tutorial.txt` | 1,881 | 285 KB | Comprehensive Anthropic prompting tutorial with examples |
+| `dair_guide.txt` | 40 | 2.3 KB | DAIR.ai prompt engineering guide |
+| `gemini_multimodal.txt` | 1,372 | 24 KB | Google Gemini multimodal + prompting guide |
+| `google_guide.txt` | 564 | 37 KB | Google general LLM prompting guidance |
+| `openai_guide.txt` | 661 | 28 KB | OpenAI prompt engineering best practices |
 
-**Total:** ~4,568 lines / ~396 KB
+**Total:** 4,568 lines / ~378 KB
 
 **Topics covered:** Chain-of-Thought, Tree of Thoughts, ReAct, Self-Consistency, Zero-Shot CoT, APE, DSPy, RAG, few-shot learning, prompt injection, model-specific behavioral guidance.
 
 ---
 
-## 9. Other Infrastructure
+## 10. Seed Prompts & v2 Planning
+
+The repository includes planning documents and seed data for a planned v2 multi-agent architecture. These are **not yet implemented** — they exist alongside the current production system.
+
+### seed_prompts.json
+
+A curated collection of **139 high-quality prompt examples** intended for the v2 prompt database. These will replace the current research-paper RAG with a database of proven prompts that agents can retrieve by task category.
+
+| Property | Value |
+|----------|-------|
+| Total prompts | 139 |
+| Fields per prompt | `id`, `task_category`, `target_model`, `techniques_used`, `description`, `prompt_text`, `source` |
+
+**By task category:**
+
+| Category | Count |
+|----------|-------|
+| `analysis` | 21 |
+| `agentic_workflow` | 20 |
+| `code_generation` | 19 |
+| `creative_writing` | 17 |
+| `data_transformation` | 12 |
+| `classification` | 11 |
+| `extraction` | 11 |
+| `summarization` | 11 |
+| `reasoning` | 10 |
+| `multimodal` | 6 |
+| `translation` | 1 |
+
+**By target model:**
+
+| Model | Count |
+|-------|-------|
+| `gpt-5.4` | 50 |
+| `gemini-3.1-pro` | 45 |
+| `claude-opus-4-6` | 44 |
+
+### prompt_engineering_principles.md
+
+A **distilled research reference** (~405 lines) that consolidates actionable findings from the knowledge base papers and guides. Organized into sections:
+
+- Structural best practices
+- Chain-of-thought and reasoning findings
+- Few-shot selection criteria
+- Retrieval, grounding, and long-context management
+- Agentic and multi-call techniques
+- Evaluation criteria
+- Robustness and security
+- Common anti-patterns
+- Multimodal-specific principles
+
+This document is intended to be embedded into v2 agent system prompts so that research knowledge is baked in statically rather than retrieved via RAG.
+
+### PLAN.md — v2 Multi-Agent Architecture
+
+A **7-phase implementation plan** (~637 lines) to evolve POGO from a single-call prompt optimizer into a multi-agent conversational pipeline. Phases:
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Agent system prompts + format profiles | Not started |
+| 2 | Conversation orchestrator (DynamoDB state machine) | Not started |
+| 3 | Prompt database RAG swap (seed_prompts.json ingestion) | Not started |
+| 4 | Guardrails enhancement | Not started |
+| 5 | Frontend chat interface | Not started |
+| 6 | Critic agent with live testing | Not started |
+| 7 | Prompt ingestion loop (flywheel) | Not started |
+
+Planned agents: Prompt Architect, Context Scout, Clarifier, Few-Shot Generator, Critic, Guardrails.
+
+---
+
+## 11. Other Infrastructure
 
 ### S3 Buckets
 
@@ -431,7 +552,7 @@ Auto-created by `AWSLambdaBasicExecutionRole`:
 
 ---
 
-## 10. IAM & Permissions
+## 12. IAM & Permissions
 
 ### Lambda execution role
 
@@ -461,7 +582,7 @@ aws lambda add-permission \
 
 ---
 
-## 11. Configuration Reference
+## 13. Configuration Reference
 
 ### Lambda constants (lambda/handler.py)
 
@@ -506,7 +627,7 @@ Must be updated with the actual API Gateway URL after each deployment.
 
 ---
 
-## 12. Deployment
+## 14. Deployment
 
 POGO has no automated CI/CD. Everything is deployed manually in order:
 
@@ -566,11 +687,10 @@ aws apigatewayv2 update-api \
 
 ---
 
-## 13. CI/CD & Version Control
+## 15. CI/CD & Version Control
 
 **VCS:** Git (GitHub — `lichris210/pogo`)  
-**Default branch:** `main`  
-**Current work branch:** `claude/document-architecture-dzivE`
+**Default branch:** `main`
 
 **No automated CI/CD pipeline.** There are no:
 - GitHub Actions workflows
@@ -583,17 +703,20 @@ All infrastructure is provisioned imperatively by `deploy.sh` and manual AWS CLI
 
 | Pattern | Reason |
 |---------|--------|
-| `venv/`, `__pycache__/` | Python environment artifacts |
-| `.env` | Credentials / secrets |
+| `venv/`, `__pycache__/`, `*.pyc`, `*.pyo` | Python environment artifacts |
+| `.env`, `*.env`, `.aws/`, `*.pem` | Credentials / secrets |
 | `pogo/documents/*.pdf` | Large binary files — only `.txt` committed |
 | `pogo/faiss_output/`, `faiss_index/` | Large binary FAISS index files |
 | `*.zip` | Lambda deployment packages |
 | `.vscode/`, `.idea/` | IDE configs |
+| `.DS_Store`, `Thumbs.db` | OS-generated files |
+| `/tmp/` | Temporary build artifacts |
 
 ### Runtime dependency summary
 
 | Context | Dependencies |
 |---------|-------------|
 | Lambda runtime | `boto3` (built-in), `numpy` (bundled in ZIP) |
-| Index build | `boto3`, `numpy`, `pymupdf` (optional, for PDF parsing) |
+| Index build (Titan) | `boto3`, `numpy`, `pymupdf` (optional, for PDF parsing) |
+| Index build (legacy) | `sentence-transformers`, `faiss-cpu`, `numpy`, `pypdf` / `pymupdf` |
 | Frontend | None (pure HTML/CSS/JS) |
