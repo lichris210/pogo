@@ -20,6 +20,8 @@ from agents import (
 )
 from orchestrator.agent_router import (
     classify_task,
+    fetch_fewshot_examples,
+    fetch_reference_prompts,
     invoke_agent,
     invoke_parallel,
 )
@@ -126,7 +128,10 @@ def _handle_initial(session: Session, message: str) -> dict:
     session.task_category = classify_task(message)
     session.user_intent = message
 
-    # 2. Prompt Architect — draft
+    # 2. Prompt Architect — draft (with reference prompts from the DB)
+    reference_prompts = fetch_reference_prompts(
+        session.task_category, session.target_model, k=3
+    )
     arch_msgs, arch_sys = prompt_architect.build_messages(
         user_intent=message,
         mode="draft",
@@ -135,6 +140,7 @@ def _handle_initial(session: Session, message: str) -> dict:
             "task_category": session.task_category,
         },
         format_profile=profile,
+        reference_prompts=reference_prompts,
     )
     draft_response = invoke_agent("prompt_architect", arch_msgs, arch_sys)
 
@@ -175,7 +181,10 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
     # Store the user's reply as accumulated context
     session.clarification_answers[f"reply_{len(session.clarification_answers) + 1}"] = message
 
-    # 1. Prompt Architect — refine
+    # 1. Prompt Architect — refine (with reference prompts from the DB)
+    reference_prompts = fetch_reference_prompts(
+        session.task_category, session.target_model, k=3
+    )
     arch_msgs, arch_sys = prompt_architect.build_messages(
         user_intent=message,
         mode="refine",
@@ -187,13 +196,18 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
             "clarification_answers": session.clarification_answers,
         },
         format_profile=profile,
+        reference_prompts=reference_prompts,
     )
 
-    # 2. Few-Shot Generator in parallel
+    # 2. Few-Shot Generator in parallel (with reference examples from the DB)
+    reference_examples = fetch_fewshot_examples(
+        session.task_category, session.target_model, k=2
+    )
     fs_msgs, fs_sys = fewshot_generator.build_messages(
         refined_prompt=session.current_draft,
         task_category=session.task_category,
         format_profile=profile,
+        reference_examples=reference_examples,
     )
 
     refined_response, fewshot_response = invoke_parallel([
@@ -227,11 +241,15 @@ def _handle_review(session: Session, message: str) -> dict:
     if message.strip().lower() in ("accept", "accepted", "looks good", "done", "yes"):
         return _handle_accepted(session)
 
-    # 1. Critic
+    # 1. Critic (with high-scoring reference prompts for comparison)
+    reference_prompts = fetch_reference_prompts(
+        session.task_category, session.target_model, k=3
+    )
     crit_msgs, crit_sys = critic.build_messages(
         final_prompt=session.current_draft,
         task_category=session.task_category,
         format_profile=profile,
+        reference_prompts=reference_prompts,
     )
     critic_response = invoke_agent("critic", crit_msgs, crit_sys)
     scores = critic.parse_scores(critic_response)
@@ -289,14 +307,57 @@ def _handle_iterating(session: Session, message: str) -> dict:
 
 
 def _handle_accepted(session: Session) -> dict:
-    """STATE: accepted — finalise."""
+    """STATE: accepted — finalise and (optionally) ingest into the prompt DB."""
     session.state = "accepted"
 
     overall = session.scores.get("overall", -1)
-    ingested = overall >= 0 and (overall / 10.0) >= INGEST_THRESHOLD
+    quality = overall / 10.0 if overall >= 0 else 0.0
+    ingested = False
+
+    if quality >= INGEST_THRESHOLD and session.current_draft:
+        ingested = _ingest_accepted_prompt(session, quality)
 
     merged = format_accepted(session.current_draft, ingested)
     return _response(session, merged)
+
+
+def _ingest_accepted_prompt(session: Session, quality_score: float) -> bool:
+    """Persist an accepted, high-quality prompt into the prompt DB.
+
+    Returns ``True`` on successful ingestion, ``False`` on any failure
+    (the session is still marked accepted — ingestion is best-effort).
+    """
+    try:
+        from prompt_db.ingest import ingest_single_prompt
+        from prompt_db.schema import PromptRecord
+
+        profile = format_profiles.FORMAT_PROFILES.get(session.target_model, {})
+        fmt = "xml" if profile.get("wrapper_format") == "xml" else "markdown"
+
+        techniques = (
+            session.scores.get("techniques_identified")
+            if isinstance(session.scores, dict)
+            else None
+        ) or []
+
+        record = PromptRecord(
+            id=f"user_{session.session_id[:12]}",
+            task_category=session.task_category or "general",
+            subcategory=session.task_category or "general",
+            target_model=session.target_model,
+            format=fmt,
+            techniques=list(techniques),
+            system_prompt=session.current_draft,
+            user_prompt_template="",
+            few_shot_examples=[],
+            quality_score=max(0.0, min(1.0, quality_score)),
+            source="user_generated",
+        )
+        ingest_single_prompt(record)
+        return True
+    except Exception as e:
+        print(f"Prompt ingestion failed: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------

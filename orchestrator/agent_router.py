@@ -160,3 +160,71 @@ def invoke_parallel(agent_configs: list[dict]) -> list[str]:
             results[idx] = text
 
     return [results[i] for i in range(len(agent_configs))]
+
+
+# ---------------------------------------------------------------------------
+# Prompt-DB retrieval helpers
+# ---------------------------------------------------------------------------
+#
+# The orchestrator queries the prompt DB on behalf of each agent using the
+# classified task category — never the user's raw input.  These helpers wrap
+# the prompt_db module so the orchestrator has one place to pull references
+# and so failures (e.g. empty DB in local tests) degrade gracefully.
+
+def fetch_reference_prompts(
+    task_category: str,
+    target_model: str,
+    k: int = 3,
+) -> list[str]:
+    """Return up to *k* reference-prompt strings for injection into an agent.
+
+    Each string combines the record's system prompt and user template so it
+    can be dropped straight into the Prompt Architect / Critic
+    ``reference_prompts`` parameter. Returns ``[]`` on any failure.
+    """
+    try:
+        from prompt_db.retrieve import retrieve_reference_prompts
+    except Exception as e:  # pragma: no cover — import failures
+        print(f"agent_router.fetch_reference_prompts: import failed ({e})")
+        return []
+
+    try:
+        records = retrieve_reference_prompts(task_category, target_model, k=k)
+    except Exception as e:
+        print(f"agent_router.fetch_reference_prompts: retrieval failed ({e})")
+        return []
+
+    out: list[str] = []
+    for r in records:
+        parts = []
+        header = (
+            f"[id={r.id} category={r.task_category}/{r.subcategory} "
+            f"techniques={','.join(r.techniques) or 'none'} "
+            f"score={r.quality_score:.2f}]"
+        )
+        parts.append(header)
+        if r.system_prompt:
+            parts.append(f"System:\n{r.system_prompt}")
+        if r.user_prompt_template:
+            parts.append(f"User:\n{r.user_prompt_template}")
+        out.append("\n".join(parts))
+    return out
+
+
+def fetch_fewshot_examples(
+    task_category: str,
+    target_model: str,
+    k: int = 2,
+) -> list[dict]:
+    """Return up to *k* few-shot example dicts for the given task."""
+    try:
+        from prompt_db.retrieve import retrieve_few_shot_examples
+    except Exception as e:  # pragma: no cover
+        print(f"agent_router.fetch_fewshot_examples: import failed ({e})")
+        return []
+
+    try:
+        return retrieve_few_shot_examples(task_category, target_model, k=k)
+    except Exception as e:
+        print(f"agent_router.fetch_fewshot_examples: retrieval failed ({e})")
+        return []
