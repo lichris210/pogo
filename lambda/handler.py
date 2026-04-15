@@ -140,6 +140,13 @@ Generate an optimized prompt for this task."""
 
 
 def lambda_handler(event, context):
+    # Route /optimize requests to the v2 orchestrator
+    raw_path = event.get("rawPath", event.get("path", ""))
+    if raw_path.endswith("/optimize"):
+        from orchestrator.orchestrator import handle_message
+        return handle_message(event)
+
+    # --- v1 /generate handler (unchanged) ---
     try:
         body = json.loads(event.get("body", "{}"))
         task = body.get("task", "").strip()
