@@ -400,33 +400,76 @@ Write a test script that:
 ### Goal
 Expand the rule-based guardrails from Phase 1 into a more robust checking system. This is a quick win that adds polish.
 
-### Claude Code Prompt
+> **Note:** This phase is split into 3 sub-prompts (4A, 4B, 4C) to keep each generation small enough to avoid Claude Code stream idle timeouts. Run them in order.
+
+### Phase 4A — Severity Levels and New Check Functions
 
 ```
-Read the following files:
-- agents/guardrails.py (the current rule-based implementation from Phase 1)
-- agents/format_profiles.py
-- PLAN.md
+Read agents/guardrails.py and agents/format_profiles.py.
 
-Enhance guardrails.py with the following:
+Update guardrails.py with these changes only (do NOT write tests yet):
 
-1. Expand the rule-based checks:
-   - Contradictory instruction detection: look for pairs like "be concise" + "provide detailed explanations", "respond in JSON" + "use markdown formatting", "never use bullet points" + "list the items"
-   - Token estimation: count approximate tokens (words * 1.3 as rough estimate) and warn if the prompt + expected output might exceed the target model's context window. Use these limits: claude = 200k, gpt = 128k, gemini = 1M
-   - Ambiguous pronoun detection: flag cases where "it", "this", "that" are used without clear antecedents in instructions
-   - Missing constraint detection: if the prompt asks for creative/generative output but has no constraints on length, format, or scope, flag it
-   - Duplicate instruction detection: flag near-identical instructions that appear in multiple sections
-
-2. Add a severity level to each check: "info", "warning", "error"
+1. Add a severity field to each finding: "info", "warning", or "error"
    - info: suggestions for improvement, not blocking
    - warning: likely issues that should be addressed
    - error: critical problems that will cause poor results
 
-3. Add a `suggest_fixes(warnings: list, errors: list, prompt: str) -> list[str]` function that generates specific fix suggestions for each issue found. These should be actionable, e.g., "Your prompt says 'be creative' without constraints. Consider adding: 'Generate exactly 3 options, each under 100 words.'"
+2. Change the internal representation to use a findings list:
+   {"passed": bool, "findings": [{"severity": str, "check": str, "message": str}]}
 
-4. Keep the module self-contained with no model calls — this should run fast and cheap. All checks are regex, heuristic, or rule-based.
+3. Keep all existing checks but tag them with appropriate severity levels
 
-Add comprehensive tests for each check with examples that should trigger and examples that should not.
+4. Add these NEW checks:
+   - Contradictory instruction detection: look for pairs like "be concise" + "provide detailed explanations", "respond in JSON" + "use markdown formatting", "never use bullet points" + "list the items"
+   - Improved token estimation: count approximate tokens (words * 1.3 as rough estimate) and warn if the prompt + expected output might exceed the target model's context window. Use these limits: claude = 200k, gpt = 128k, gemini = 1M
+   - Ambiguous pronoun detection: flag cases where "it", "this", "that" are used without clear antecedents in instructions
+   - Missing constraint detection: if the prompt asks for creative/generative output but has no constraints on length, format, or scope, flag it
+   - Duplicate instruction detection: flag near-identical instructions that appear in multiple sections
+
+5. Keep backward compatibility — check_prompt() should still return {"passed", "warnings", "errors"} by deriving them from the new findings list.
+
+Keep the module self-contained with no model calls — all checks are regex, heuristic, or rule-based.
+```
+
+### Phase 4B — suggest_fixes() Function
+
+```
+Read agents/guardrails.py (updated in Phase 4A).
+
+Add a suggest_fixes(findings: list, prompt: str) -> list[str] function that generates specific, actionable fix suggestions for each finding. Examples of the kind of suggestions it should produce:
+
+- Vague language → "Your prompt says 'be creative' without constraints. Consider adding: 'Generate exactly 3 options, each under 100 words.'"
+- Missing role → "Add a role definition like: 'You are a senior data analyst specializing in...'"
+- Contradictions → "Your prompt contains conflicting instructions: 'be concise' and 'provide detailed explanations'. Remove one or clarify when each applies."
+- Missing output format → "Specify the expected output format, e.g.: 'Return your analysis as a JSON object with keys: summary, findings, recommendations.'"
+- Ambiguous pronouns → "Replace 'it' with the specific noun it refers to for clarity."
+
+Keep it rule-based, no model calls. Each finding in the list should map to one concrete suggestion string.
+```
+
+### Phase 4C — Comprehensive Tests
+
+```
+Read agents/guardrails.py (updated in Phases 4A and 4B).
+
+Write tests/test_guardrails.py with comprehensive tests covering:
+
+1. Each existing check (vague language, missing format, missing role, too short, empty prompt)
+   - At least one prompt that SHOULD trigger each check
+   - At least one prompt that should NOT trigger each check
+
+2. Each new check from Phase 4A:
+   - Contradictory instructions: test with conflicting pairs and with non-conflicting instructions
+   - Token estimation: test with a prompt that exceeds GPT's 128k limit but not Claude's 200k
+   - Ambiguous pronouns: test with unclear "it"/"this" and with properly referenced pronouns
+   - Missing constraints: test creative prompt without length/format limits vs one with constraints
+   - Duplicate instructions: test with near-identical repeated sentences vs legitimately similar but distinct instructions
+
+3. suggest_fixes(): verify it returns a list of actionable strings, one per finding
+
+4. Backward compatibility: verify check_prompt() still returns {"passed": bool, "warnings": list, "errors": list}
+
+5. Severity levels: verify findings have correct severity tags ("info", "warning", "error")
 ```
 
 ### Files to Upload to Claude Code
@@ -441,7 +484,9 @@ Add comprehensive tests for each check with examples that should trigger and exa
 ### Goal
 Evolve the frontend from a single input/output flow to a multi-turn chat interface that supports the full agent pipeline.
 
-### Claude Code Prompt
+> **Note:** This phase is split into 3 sub-prompts (5A, 5B, 5C) to keep each generation small enough to avoid Claude Code stream idle timeouts. Run them in order.
+
+### Phase 5A — Chat Interface and API Integration
 
 ```
 Read the following files:
@@ -450,7 +495,7 @@ Read the following files:
 - The entire existing frontend directory (all HTML, CSS, JS files)
 - orchestrator/orchestrator.py (to understand the response format)
 
-Evolve the frontend into a multi-turn chat interface. The backend orchestrator returns responses with this structure:
+The backend orchestrator returns responses with this structure:
 {
     "session_id": "...",
     "state": "initial|awaiting_context|review|iterating|accepted",
@@ -460,7 +505,7 @@ Evolve the frontend into a multi-turn chat interface. The backend orchestrator r
     "sample_output": "..."   // live test result (if available)
 }
 
-Build the following:
+Build the core chat interface:
 
 1. Chat Interface
    - Replace the current single input/output with a scrolling chat window
@@ -469,34 +514,54 @@ Build the following:
    - Input area at the bottom with send button
    - Session persists via session_id stored in the frontend state
 
-2. Rich Message Rendering
-   - Regular chat messages render as normal text bubbles
-   - Prompt drafts render in a distinct card/code block with syntax highlighting appropriate to the format (XML highlighting for Claude prompts, markdown rendering for GPT prompts)
-   - Context Scout suggestions render as a checklist the user can reference
-   - Clarifier questions render as clearly numbered items
-   - Critic scores render as a visual scorecard (small bar charts or colored indicators for each dimension)
-   - Sample output (from live test) renders in a collapsible section with a distinct background
-   - Guardrail warnings render as colored banners (yellow for warnings, red for errors) above the prompt draft
-
-3. Diff View
-   - When the prompt is refined (version 2+), show a toggle button: "Show changes"
-   - When toggled, display a side-by-side or inline diff highlighting additions (green) and removals (red)
-   - Use a lightweight JS diff library — jsdiff (npm: diff) is a good option
-   - Store prompt versions in the frontend state for comparison
-
-4. Action Buttons
-   - After the prompt draft is shown: "Looks good, evaluate it" (triggers review state) and "I want to make changes" (triggers iterating state)
-   - After critic evaluation: "Accept this prompt" and "Refine further"
-   - "Accept this prompt" should display the final prompt in a clean, copyable format and offer a "Copy to clipboard" button
-   - "Start over" button always visible to reset the session
-
-5. API Integration
+2. API Integration
    - All messages go to the same endpoint: POST /optimize (or whatever the current endpoint is)
    - Request body: { session_id, message, target_model }
    - First message creates a new session (no session_id sent), subsequent messages include the session_id from the first response
    - Handle loading states — show a typing indicator while waiting for the orchestrator response
 
+3. Action Buttons
+   - After the prompt draft is shown: "Looks good, evaluate it" (triggers review state) and "I want to make changes" (triggers iterating state)
+   - After critic evaluation: "Accept this prompt" and "Refine further"
+   - "Accept this prompt" should display the final prompt in a clean, copyable format and offer a "Copy to clipboard" button
+   - "Start over" button always visible to reset the session
+
 Keep the existing styling approach and design language. This should feel like an evolution of the current UI, not a complete redesign. If the current frontend uses a framework (React, Vue, etc.), continue using it. If it's vanilla JS/HTML, keep it vanilla.
+```
+
+### Phase 5B — Rich Message Rendering
+
+```
+Read the following files:
+- The frontend files updated in Phase 5A
+- orchestrator/orchestrator.py (for response format reference)
+
+Add rich rendering for different message types in the chat interface:
+
+1. Regular chat messages render as normal text bubbles
+2. Prompt drafts render in a distinct card/code block with syntax highlighting appropriate to the format (XML highlighting for Claude prompts, markdown rendering for GPT prompts)
+3. Context Scout suggestions render as a checklist the user can reference
+4. Clarifier questions render as clearly numbered items
+5. Critic scores render as a visual scorecard (small bar charts or colored indicators for each dimension)
+6. Sample output (from live test) renders in a collapsible section with a distinct background
+7. Guardrail warnings render as colored banners (yellow for warnings, red for errors) above the prompt draft
+
+Keep the existing styling approach. Each message type should be visually distinct but feel cohesive within the chat UI.
+```
+
+### Phase 5C — Diff View
+
+```
+Read the frontend files updated in Phases 5A and 5B.
+
+Add a prompt diff view:
+
+1. When the prompt is refined (version 2+), show a toggle button: "Show changes"
+2. When toggled, display a side-by-side or inline diff highlighting additions (green) and removals (red)
+3. Use a lightweight JS diff library — jsdiff (npm: diff) is a good option
+4. Store prompt versions in the frontend state for comparison
+
+This should integrate naturally with the existing prompt draft cards from Phase 5B.
 ```
 
 ### Files to Upload to Claude Code
@@ -623,14 +688,20 @@ This is the growth flywheel — as more users accept high-quality prompts, the r
 
 ## Implementation Order Summary
 
-| Phase | What | Depends On | Estimated Effort |
-|-------|------|-----------|-----------------|
-| 1 | Agent system prompts + format profiles | Phase 0 (prep) | Light — mostly writing prompts |
-| 2 | Conversation orchestrator | Phase 1 | Heavy — core architecture change |
-| 3 | Prompt database RAG swap | Phase 1, 2 | Medium — adapting existing infra |
-| 4 | Guardrails enhancement | Phase 1 | Light — expanding existing module |
-| 5 | Frontend chat interface | Phase 2 | Heavy — UI overhaul |
-| 6 | Critic + live testing | Phase 2, 3 | Medium |
-| 7 | Prompt ingestion loop | Phase 3, 6 | Light |
+| Phase | What | Depends On | Estimated Effort | Status |
+|-------|------|-----------|-----------------|--------|
+| 1 | Agent system prompts + format profiles | Phase 0 (prep) | Light — mostly writing prompts | ✅ Complete |
+| 2 | Conversation orchestrator | Phase 1 | Heavy — core architecture change | ✅ Complete |
+| 3 | Prompt database RAG swap | Phase 1, 2 | Medium — adapting existing infra | ✅ Complete |
+| 4A | Guardrails — severity levels + new checks | Phase 1 | Light | Not started |
+| 4B | Guardrails — suggest_fixes() | Phase 4A | Light | Not started |
+| 4C | Guardrails — comprehensive tests | Phase 4B | Light | Not started |
+| 5A | Frontend — chat interface + API + action buttons | Phase 2 | Medium | Not started |
+| 5B | Frontend — rich message rendering | Phase 5A | Medium | Not started |
+| 5C | Frontend — diff view | Phase 5B | Light | Not started |
+| 6 | Critic + live testing | Phase 2, 3 | Medium | Not started |
+| 7 | Prompt ingestion loop | Phase 3, 6 | Light | Not started |
 
 Phases 4 and 5 can run in parallel with Phase 3. Phase 6 needs both 2 and 3 complete. Phase 7 is a quick add-on after 6.
+
+> **Why sub-phases?** Phases 4 and 5 were split into smaller prompts (4A/4B/4C, 5A/5B/5C) because the original single-prompt versions caused Claude Code stream idle timeouts — the output was too large for a single generation. Each sub-prompt should be run sequentially within its phase.
