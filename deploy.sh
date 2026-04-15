@@ -161,18 +161,56 @@ aws lambda add-permission \
   --region $REGION \
   2>/dev/null || true
 
+# --- Step 5: Create /optimize route for v2 orchestrator ---
+echo ""
+echo "Step 5: Creating /optimize route (v2 orchestrator)..."
+
+aws apigatewayv2 create-route \
+  --api-id $API_ID \
+  --route-key "POST /optimize" \
+  --target "integrations/$INTEGRATION_ID" \
+  --region $REGION \
+  2>/dev/null || true
+
+echo "  /optimize route created"
+
+# --- Step 6: Create DynamoDB sessions table ---
+echo ""
+echo "Step 6: Creating DynamoDB sessions table..."
+
+aws dynamodb create-table \
+  --table-name pogo-sessions \
+  --attribute-definitions AttributeName=session_id,AttributeType=S \
+  --key-schema AttributeName=session_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region $REGION \
+  2>/dev/null || echo "  Table already exists"
+
+# Attach DynamoDB policy to Lambda role
+aws iam attach-role-policy --role-name $ROLE_NAME \
+  --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess 2>/dev/null || true
+
+echo "  DynamoDB table ready"
+
 API_URL="https://$API_ID.execute-api.$REGION.amazonaws.com/generate"
+OPTIMIZE_URL="https://$API_ID.execute-api.$REGION.amazonaws.com/optimize"
 
 echo ""
 echo "============================================"
 echo "  POGO DEPLOYED SUCCESSFULLY!"
 echo "============================================"
 echo ""
-echo "  API URL: $API_URL"
+echo "  v1 API URL: $API_URL"
+echo "  v2 API URL: $OPTIMIZE_URL"
 echo ""
-echo "  Test it:"
+echo "  Test v1:"
 echo "  curl -X POST $API_URL \\"
 echo "    -H 'Content-Type: application/json' \\"
 echo "    -d '{\"task\": \"Analyze customer data\", \"model\": \"claude\"}'"
+echo ""
+echo "  Test v2:"
+echo "  curl -X POST $OPTIMIZE_URL \\"
+echo "    -H 'Content-Type: application/json' \\"
+echo "    -d '{\"message\": \"Analyze customer data\", \"target_model\": \"claude\"}'"
 echo ""
 echo "============================================"
