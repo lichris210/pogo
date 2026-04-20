@@ -705,3 +705,14 @@ This is the growth flywheel — as more users accept high-quality prompts, the r
 Phases 4 and 5 can run in parallel with Phase 3. Phase 6 needs both 2 and 3 complete. Phase 7 is a quick add-on after 6.
 
 > **Why sub-phases?** Phases 4 and 5 were split into smaller prompts (4A/4B/4C, 5A/5B/5C) because the original single-prompt versions caused Claude Code stream idle timeouts — the output was too large for a single generation. Each sub-prompt should be run sequentially within its phase.
+
+---
+
+## POGO ideas/possible additions
+
+- optmize LLM usage rates
+    - token usage
+    - model usage
+- expand rag db of prompts to include:
+    - advanced one-shot examples
+    - multi-shot examples
