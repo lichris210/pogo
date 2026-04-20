@@ -1,6 +1,11 @@
 # POGO Architecture
 
-> **POGO** (Prompt Optimization & Generation Oracle) is a serverless RAG application that generates optimized LLM prompts grounded in research documentation. A user describes a task and selects a target model; POGO retrieves the most relevant prompt-engineering research and uses Claude 3.5 Haiku to craft a model-specific, research-backed prompt.
+> **POGO** (Prompt Optimization & Generation Oracle) is a serverless RAG application that generates optimized LLM prompts grounded in research documentation.
+>
+> Two API paths coexist in the same Lambda:
+>
+> - **v1 — `POST /generate`** (production). Single-shot: a user describes a task, selects a target model, and gets back an optimized prompt grounded in research-paper RAG.
+> - **v2 — `POST /optimize`** (Phases 1–3 complete). Multi-turn orchestrated pipeline: a stateful conversation routes the user through an agent pipeline (Prompt Architect, Context Scout, Clarifier, Few-Shot Generator, Critic, Guardrails) with DynamoDB-backed session state and a prompt database that replaces research-paper RAG with proven prompts retrieved by task category.
 
 ---
 
@@ -15,12 +20,13 @@
 7. [Vector Store (S3 + NumPy)](#7-vector-store-s3--numpy)
 8. [Bedrock Calls](#8-bedrock-calls)
 9. [Knowledge Base Sources](#9-knowledge-base-sources)
-10. [Seed Prompts & v2 Planning](#10-seed-prompts--v2-planning)
+10. [v2 Multi-Agent Architecture](#10-v2-multi-agent-architecture)
 11. [Other Infrastructure](#11-other-infrastructure)
 12. [IAM & Permissions](#12-iam--permissions)
 13. [Configuration Reference](#13-configuration-reference)
 14. [Deployment](#14-deployment)
-15. [CI/CD & Version Control](#15-cicd--version-control)
+15. [Testing](#15-testing)
+16. [CI/CD & Version Control](#16-cicd--version-control)
 
 ---
 
@@ -29,13 +35,15 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         Browser / API Client                     │
-│                    HTTP POST {task, model}                        │
+│             v1: POST /generate  { task, model }                  │
+│             v2: POST /optimize  { session_id?, message, target_model }
 └─────────────────────────────┬────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │              API Gateway HTTP API  (us-east-1)                   │
-│              Route: POST /generate                               │
+│              Routes: POST /generate  (v1)                        │
+│                      POST /optimize  (v2 orchestrator)           │
 │              CORS: *, Content-Type                               │
 └─────────────────────────────┬────────────────────────────────────┘
                               │ Lambda invoke
@@ -44,24 +52,24 @@
 │              Lambda: pogo-prompt-generator                       │
 │              Python 3.12 | 512 MB | 60 s timeout                │
 │                                                                  │
-│  ① Parse & validate {task, model}                               │
-│  ② embed_query(task)  ──────────────────────────────────┐       │
-│  ③ Load embeddings.npy + chunks.pkl from S3 (cold start)│       │
-│  ④ Cosine similarity search → top-5 chunks              │       │
-│  ⑤ generate_prompt(task, model, chunks) ────────────────┤       │
-│  ⑥ Return JSON {optimized_prompt, sources_used}         │       │
-└────────────────┬────────────────────────────────────────┼───────┘
-                 │ S3 GetObject                            │ Bedrock InvokeModel
-                 ▼                                         ▼
-┌──────────────────────────┐          ┌───────────────────────────────────┐
-│  S3: pogo-knowledge-base │          │  Amazon Bedrock  (us-east-1)      │
-│  index/embeddings.npy    │          │                                   │
-│  index/chunks.pkl        │          │  • Titan Embed v2  (256-dim)      │
-└──────────────────────────┘          │    embed_query + index builds     │
-                                      │                                   │
-                                      │  • Claude 3.5 Haiku               │
-                                      │    generate_prompt                │
-                                      └───────────────────────────────────┘
+│  rawPath.endswith("/optimize") ?                                 │
+│      → orchestrator.handle_message(event)  (v2)                  │
+│  else:                                                           │
+│      → v1 /generate path  (embed → search → generate)            │
+└──┬───────────────────┬───────────────────┬──────────────────────┘
+   │                   │                   │
+   │ S3 GetObject      │ DynamoDB          │ Bedrock InvokeModel
+   ▼                   ▼                   ▼
+┌──────────────────────────┐ ┌────────────────────┐ ┌────────────────────────┐
+│  S3: pogo-knowledge-base │ │  DynamoDB          │ │  Amazon Bedrock        │
+│  index/…                 │ │  pogo-sessions     │ │  (us-east-1)           │
+│    embeddings.npy        │ │  (v2 state)        │ │                        │
+│    chunks.pkl   (v1 RAG) │ └────────────────────┘ │  • Titan Embed v2      │
+│                          │                        │    (256-dim, cosine)   │
+│  prompt_db/…    (v2 RAG) │                        │                        │
+│    prompts.json          │                        │  • Claude 3.5 Haiku    │
+│    embeddings.npy        │                        │    (all agents)        │
+└──────────────────────────┘                        └────────────────────────┘
 
 ┌──────────────────────────┐
 │  S3: pogo-web-ui         │  ← static website hosting
@@ -72,6 +80,8 @@
 ---
 
 ## 2. Request Flow
+
+### v1 — `POST /generate` (single-shot)
 
 ```
 Browser
@@ -103,6 +113,53 @@ API Gateway  ──→  Lambda (pogo-prompt-generator)
 
 On **warm** Lambda containers, the S3 reads are skipped — `_embeddings` and `_chunks` are cached as module-level globals.
 
+### v2 — `POST /optimize` (multi-turn orchestrator)
+
+```
+Browser
+  │
+  │  POST /optimize
+  │  { "session_id"?: "...", "message": "...", "target_model": "claude|gpt|gemini" }
+  │
+  ▼
+API Gateway  ──→  Lambda  ──→  orchestrator.handle_message(event)
+                                   │
+                                   ├─ DynamoDB GetItem  (pogo-sessions)
+                                   ├─ dispatch by session.state:
+                                   │
+                                   │   initial           → Prompt Architect (draft)
+                                   │                      + Context Scout ∥ Clarifier
+                                   │                      → merged response
+                                   │                      → state = awaiting_context
+                                   │
+                                   │   awaiting_context  → Prompt Architect (refine)
+                                   │                      ∥ Few-Shot Generator
+                                   │                      → Guardrails (rule-based)
+                                   │                      → state = review (if passed)
+                                   │
+                                   │   review            → Critic (with reference prompts)
+                                   │                      + inline live test
+                                   │                      → state = iterating
+                                   │
+                                   │   iterating         → Prompt Architect (refine)
+                                   │                      → Guardrails
+                                   │                      → state = review
+                                   │
+                                   │   accepted          → format_accepted + auto-ingest
+                                   │                      high-scoring prompts into
+                                   │                      prompt_db/ if overall/10 ≥ 0.8
+                                   │
+                                   ├─ each agent call = Bedrock InvokeModel (Claude 3.5 Haiku)
+                                   ├─ reference prompts retrieved from prompt_db/ by
+                                   │   task_category (not user input)
+                                   ├─ DynamoDB PutItem  (persist session)
+                                   │
+                                   └─ 200 { session_id, state, message, prompt_draft,
+                                            scores?, sample_output? }
+```
+
+Parallel agent calls use `concurrent.futures.ThreadPoolExecutor` inside the Lambda process (Python 3.12). Order is preserved via index-keyed futures so the orchestrator can zip results back to their config positions.
+
 ---
 
 ## 3. Project Structure
@@ -110,7 +167,34 @@ On **warm** Lambda containers, the S3 reads are skipped — `_embeddings` and `_
 ```
 pogo/
 ├── lambda/
-│   └── handler.py                      # Lambda function — embed, search, generate
+│   └── handler.py                      # Lambda entry — routes /optimize → v2, else v1
+├── agents/                             # v2 — agent system prompts + message builders
+│   ├── __init__.py
+│   ├── format_profiles.py              #   Target-model format configs (Claude/GPT/Gemini)
+│   ├── prompt_architect.py             #   Drafts / refines structured prompts
+│   ├── context_scout.py                #   Suggests supporting context
+│   ├── clarifier.py                    #   Surfaces unstated assumptions (3–5 questions)
+│   ├── fewshot_generator.py            #   Generates 2–3 few-shot example pairs
+│   ├── critic.py                       #   Scores prompts across 6 dimensions + parse_scores
+│   └── guardrails.py                   #   Rule-based checks (no model calls)
+├── orchestrator/                       # v2 — stateful conversation manager
+│   ├── __init__.py
+│   ├── session.py                      #   Session dataclass + DynamoDB persistence
+│   ├── agent_router.py                 #   classify_task, invoke_agent, invoke_parallel,
+│   │                                   #   fetch_reference_prompts, fetch_fewshot_examples
+│   ├── response_merger.py              #   Merges draft+scout+clarifier, refinement, review
+│   └── orchestrator.py                 #   Lambda handler for /optimize; state machine
+├── prompt_db/                          # v2 — prompt database (RAG swap)
+│   ├── __init__.py
+│   ├── schema.py                       #   PromptRecord dataclass + to_embedding_text
+│   ├── embeddings.py                   #   Bedrock Titan Embed v2 client (256-dim)
+│   ├── store.py                        #   S3-backed vector store (prompt_db/ prefix)
+│   ├── ingest.py                       #   ingest_seed_data + ingest_single_prompt + CLI
+│   └── retrieve.py                     #   retrieve_reference_prompts + few-shot helpers
+├── tests/                              # v2 — offline unit tests
+│   ├── __init__.py
+│   ├── test_orchestrator.py            #   30 tests: session, classify, merging, states
+│   └── test_prompt_db.py               #   16 tests: schema, ingest, retrieval, fallbacks
 ├── pogo/
 │   ├── documents/                      # Source text files (PDFs excluded via .gitignore)
 │   │   ├── anthropic_guide.txt         #   Anthropic prompt engineering overview
@@ -128,8 +212,8 @@ pogo/
 ├── ARCHITECTURE.md                     # This file
 ├── PLAN.md                             # v2 multi-agent architecture plan (7 phases)
 ├── README.md                           # Project overview, setup, and usage
-├── deploy.sh                           # Lambda + API Gateway deployment script
-├── pogo.html                           # Single-file frontend (HTML + CSS + JS)
+├── deploy.sh                           # Lambda + API Gateway + DynamoDB deployment script
+├── pogo.html                           # Single-file frontend (HTML + CSS + JS) — v1 only
 ├── prompt_engineering_principles.md    # Distilled research findings for agent prompts
 └── seed_prompts.json                   # 139 curated prompts for v2 prompt database
 ```
@@ -138,16 +222,20 @@ pogo/
 
 | File / Directory | Role | Status |
 |------------------|------|--------|
-| `lambda/handler.py` | Lambda function — the entire backend | **Active (production)** |
-| `pogo/documents/*.txt` | Knowledge base source documents (6 files, ~378 KB) | **Active** |
-| `pogo/scripts/build_index_titan.py` | Builds S3 index using Bedrock Titan embeddings | **Active** |
+| `lambda/handler.py` | Lambda entry. Dispatches `/optimize` to the v2 orchestrator; keeps v1 `/generate` unchanged | **Active (production)** |
+| `agents/` | v2 agent modules — each exports `SYSTEM_PROMPT` + `build_messages()` returning `(messages, system)` for Bedrock | **Phase 1 complete** |
+| `orchestrator/` | v2 conversation manager — DynamoDB session state, agent routing, response merging, state machine | **Phase 2 complete** |
+| `prompt_db/` | v2 prompt database — Titan-embedded record store with category-based retrieval | **Phase 3 complete** |
+| `tests/` | Offline unit tests (46 total; Bedrock + DynamoDB mocked) | **Active** |
+| `pogo/documents/*.txt` | Knowledge base source documents (6 files, ~378 KB) | **Active** — powers v1 RAG |
+| `pogo/scripts/build_index_titan.py` | Builds v1 S3 index using Bedrock Titan embeddings | **Active** |
 | `pogo/scripts/build_index.py` | Builds FAISS index using local sentence-transformers | Legacy — kept for reference |
 | `scripts/ingest.py` | Earliest prototype indexer (basic FAISS + sentence-transformers) | Deprecated |
-| `deploy.sh` | Creates IAM role, packages Lambda, deploys API Gateway | **Active** |
-| `pogo.html` | Single-file web UI (S3-hosted static site) | **Active** |
-| `PLAN.md` | v2 architecture plan — multi-agent pipeline with 7 phases | Planning document |
-| `prompt_engineering_principles.md` | Research findings distilled into actionable principles | Reference for v2 agent prompts |
-| `seed_prompts.json` | 139 curated prompt examples across 11 categories and 3 models | Seed data for v2 prompt database |
+| `deploy.sh` | Creates IAM role, packages Lambda, deploys API Gateway (`/generate` + `/optimize`), creates `pogo-sessions` DynamoDB table | **Active** |
+| `pogo.html` | Single-file web UI (S3-hosted static site). Still targets v1 `/generate` — chat UI is Phase 5 | **Active (v1 only)** |
+| `PLAN.md` | v2 architecture plan — multi-agent pipeline with 7 phases | Phases 1–3 implemented |
+| `prompt_engineering_principles.md` | Research findings distilled into actionable principles | Embedded into v2 agent SYSTEM_PROMPTs |
+| `seed_prompts.json` | 139 curated prompt examples across 11 categories and 3 models | Seed for v2 `prompt_db/` |
 
 ---
 
@@ -159,18 +247,43 @@ pogo/
 **Runtime:** Python 3.12  
 **Memory:** 512 MB  
 **Timeout:** 60 s  
-**Trigger:** API Gateway HTTP API (POST /generate)
+**Trigger:** API Gateway HTTP API (POST `/generate`, POST `/optimize`)
 
-### Key functions
+### Routing
+
+```python
+def lambda_handler(event, context):
+    raw_path = event.get("rawPath", event.get("path", ""))
+    if raw_path.endswith("/optimize"):
+        from orchestrator.orchestrator import handle_message
+        return handle_message(event)     # v2 orchestrator
+    # else: v1 /generate handler below
+```
+
+The v2 orchestrator import is **lazy** — the module is only loaded when `/optimize` is hit, so v1 `/generate` requests avoid paying the cost of importing `orchestrator/`, `agents/`, and `prompt_db/`.
+
+### Key functions (v1 `/generate` path)
 
 | Function | Purpose |
 |----------|---------|
-| `lambda_handler(event, context)` | Entry point — parses HTTP body, orchestrates search + generation, returns HTTP response |
+| `lambda_handler(event, context)` | Entry point — dispatches /optimize to v2, else runs v1 search + generation |
 | `get_bedrock()` | Returns cached `boto3.client("bedrock-runtime")` instance (lazy singleton) |
 | `load_resources()` | Downloads `embeddings.npy` + `chunks.pkl` from S3 on first call; caches as globals |
 | `embed_query(text)` | Calls Bedrock Titan Embed v2; returns 256-dim normalized numpy vector |
 | `search(query, top_k)` | Loads S3 index on first call (cached globally); computes cosine similarity; returns top-K chunks |
 | `generate_prompt(task, model, chunks)` | Builds system + user messages; calls Bedrock Claude 3.5 Haiku; returns raw text |
+
+### Key functions (v2 `/optimize` path — see §10)
+
+| Function / Module | Purpose |
+|-------------------|---------|
+| `orchestrator.handle_message(event)` | Main state-machine dispatcher — load/create session, route by state, save, respond |
+| `orchestrator.session.{create,load,save}_session` | DynamoDB-backed CRUD on `pogo-sessions` |
+| `orchestrator.agent_router.classify_task` | Keyword-based task categorisation |
+| `orchestrator.agent_router.invoke_agent` | Calls Bedrock with `(messages, system)` from an agent's `build_messages()` |
+| `orchestrator.agent_router.invoke_parallel` | ThreadPoolExecutor-based parallel agent calls with order preservation |
+| `orchestrator.agent_router.fetch_reference_prompts` | Pulls top-k reference prompts from `prompt_db/` by task category |
+| `prompt_db.retrieve.retrieve_reference_prompts` | Cosine-similarity retrieval filtered by target model |
 
 ### Global cold-start cache
 
@@ -242,9 +355,10 @@ NumPy must be bundled in the deployment ZIP (it is not available in the default 
 
 ### Routes
 
-| Method | Route | Backend | Payload format version |
-|--------|-------|---------|------------------------|
-| POST | `/generate` | Lambda (pogo-prompt-generator) | `2.0` |
+| Method | Route | Backend | Payload format version | Role |
+|--------|-------|---------|------------------------|------|
+| POST | `/generate` | Lambda (pogo-prompt-generator) | `2.0` | v1 single-shot prompt generation |
+| POST | `/optimize` | Lambda (pogo-prompt-generator) | `2.0` | v2 multi-turn orchestrator |
 
 ### CORS configuration
 
@@ -263,6 +377,7 @@ AllowHeaders: Content-Type
 
 ```
 https://<api-id>.execute-api.us-east-1.amazonaws.com/generate
+https://<api-id>.execute-api.us-east-1.amazonaws.com/optimize
 ```
 
 ---
@@ -449,20 +564,121 @@ All source documents live in `pogo/documents/` (text files committed to git; PDF
 
 ---
 
-## 10. Seed Prompts & v2 Planning
+## 10. v2 Multi-Agent Architecture
 
-The repository includes planning documents and seed data for a planned v2 multi-agent architecture. These are **not yet implemented** — they exist alongside the current production system.
+The v2 pipeline lives alongside v1 and is reached via `POST /optimize`. Phases 1–3 of `PLAN.md` are implemented and deployed; the rest remain planning documents.
 
-### seed_prompts.json
+### 10.1 Phase status
 
-A curated collection of **139 high-quality prompt examples** intended for the v2 prompt database. These will replace the current research-paper RAG with a database of proven prompts that agents can retrieve by task category.
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Agent system prompts + format profiles (`agents/`) | **Complete** |
+| 2 | Conversation orchestrator + DynamoDB state machine (`orchestrator/`) | **Complete** |
+| 3 | Prompt database RAG swap (`prompt_db/`, seed ingestion, retrieval wired into agents) | **Complete** |
+| 4 | Guardrails enhancement (severity levels, contradiction/pronoun/duplicate checks, `suggest_fixes()`) | Not started |
+| 5 | Frontend chat interface | Not started |
+| 6 | Critic agent with dedicated live-testing pipeline (`orchestrator/live_test.py`) | Not started (simplified inline live-test exists) |
+| 7 | Prompt ingestion flywheel (dedup, admin CLI) | Partial — auto-ingest hook is wired via `INGEST_THRESHOLD`, but dedup and `prompt_db/admin.py` are not yet built |
 
-| Property | Value |
-|----------|-------|
-| Total prompts | 139 |
-| Fields per prompt | `id`, `task_category`, `target_model`, `techniques_used`, `description`, `prompt_text`, `source` |
+### 10.2 Agents (`agents/`)
 
-**By task category:**
+Every agent module exports:
+
+- `SYSTEM_PROMPT` — a template with `{format_instructions}` and (where applicable) `{reference_prompts}` / `{reference_examples}` placeholders.
+- `build_messages(...) -> tuple[list[dict], str]` — returns `(messages, system)` ready for `bedrock.invoke_model`.
+
+| Agent | Purpose | Uses prompt_db RAG? |
+|-------|---------|---------------------|
+| `prompt_architect.py` | Drafts and refines structured prompts (modes: `"draft"` / `"refine"`) | Yes — `reference_prompts` |
+| `context_scout.py` | Suggests supporting context the user should provide | No |
+| `clarifier.py` | Produces 3–5 ranked clarifying questions | No |
+| `fewshot_generator.py` | Generates 2–3 diverse few-shot example pairs | Yes — `reference_examples` |
+| `critic.py` | Scores prompts across 6 dimensions + `parse_scores()` (JSON first, regex fallback) | Yes — `reference_prompts` |
+| `guardrails.py` | Rule-based anti-pattern checks (no model calls) | No |
+| `format_profiles.py` | Per-target-model format config (XML for Claude, Markdown for GPT/Gemini) + `get_format_instructions()` / `format_section()` | N/A |
+
+**Critic scoring dimensions:** `clarity`, `specificity`, `completeness`, `constraint_coverage`, `hallucination_risk`, `overall` (each 0–10), plus `techniques_identified` used by the ingestion hook.
+
+### 10.3 Orchestrator (`orchestrator/`)
+
+**`session.py`** — `Session` dataclass with DynamoDB persistence. Complex fields (`conversation_history`, `user_context`, `clarification_answers`, `scores`) are JSON-serialised to strings for DynamoDB to avoid type-mapping complexity. Table: `pogo-sessions` (partition key `session_id`, pay-per-request billing).
+
+**`agent_router.py`** —
+
+| Function | Purpose |
+|----------|---------|
+| `classify_task(user_intent)` | Keyword-based classification into one of `data_analysis`, `code_generation`, `writing`, `creative`, `web_development`, `research`, `general` |
+| `invoke_agent(agent_name, messages, system, model_id?, max_tokens=2000)` | Single Bedrock Messages-API call (Claude 3.5 Haiku by default) |
+| `invoke_parallel(configs)` | `ThreadPoolExecutor` runs multiple `invoke_agent` calls concurrently; order-preserved via index-keyed dict |
+| `fetch_reference_prompts(task_category, target_model, k=3)` | Wraps `prompt_db.retrieve.retrieve_reference_prompts`; degrades to `[]` on any failure |
+| `fetch_fewshot_examples(task_category, target_model, k=2)` | Wraps `prompt_db.retrieve.retrieve_few_shot_examples` |
+
+**`response_merger.py`** — deterministic string assembly of merged agent outputs:
+
+| Merger | Used in state |
+|--------|---------------|
+| `merge_draft_scout_clarifier(draft, scout, clarifier)` | `initial` |
+| `merge_refinement(refined, fewshot, guardrail_result)` | `awaiting_context`, `iterating` |
+| `merge_review(critic, scores, sample_output)` | `review` |
+| `format_accepted(final_prompt, ingested)` | `accepted` |
+| `_extract_prompt_block(raw)` | Pulls code-fenced prompt out of agent responses |
+
+**`orchestrator.py`** — `handle_message(event)` state machine:
+
+```
+initial          → Prompt Architect (draft) + Scout ∥ Clarifier  → awaiting_context
+awaiting_context → Prompt Architect (refine) ∥ Few-Shot → Guardrails → review
+review           → Critic + inline live-test                      → iterating
+iterating        → Prompt Architect (refine) → Guardrails         → review
+accepted         → format_accepted; auto-ingest if quality ≥ INGEST_THRESHOLD
+```
+
+Shortcuts: "accept", "accepted", "looks good", "done", "yes" in `review`/`iterating` states jump straight to `accepted`.
+
+**Response envelope (every state):**
+
+```json
+{
+  "session_id": "...",
+  "state": "initial|awaiting_context|review|iterating|accepted",
+  "message": "chat-rendered text",
+  "prompt_draft": "...",
+  "scores": { "clarity": 8, ... },
+  "sample_output": "live-test result or null"
+}
+```
+
+### 10.4 Prompt database (`prompt_db/`)
+
+Replaces v1 research-paper RAG with a database of proven prompts. Retrieval queries are built from the **task category** (never the user's raw input), so similarity search matches on prompt-engineering patterns rather than surface wording.
+
+| File | Purpose |
+|------|---------|
+| `schema.py` | `PromptRecord` dataclass + `to_embedding_text()`. Canonical vocabularies: `VALID_TASK_CATEGORIES`, `VALID_TARGET_MODELS`, `VALID_FORMATS`, `VALID_SOURCES`. The embedded text is a category/technique/summary descriptor — **not** the raw prompt body |
+| `embeddings.py` | Cached Bedrock Titan Embed v2 client (`amazon.titan-embed-text-v2:0`, 256-dim, normalised) |
+| `store.py` | S3-backed vector store (`s3://pogo-knowledge-base/prompt_db/prompts.json` + `.npy`). Local-dir fallback via `POGO_PROMPT_DB_LOCAL_DIR` for tests |
+| `ingest.py` | `ingest_seed_data(seed_file, overwrite=True)` + `ingest_single_prompt(record)`; CLI: `python -m prompt_db.ingest --seed-file seed_prompts.json` |
+| `retrieve.py` | `retrieve_reference_prompts(task_category, target_model, k=3)` and `retrieve_few_shot_examples(task_category, target_model, k=2)`; in-process cache + `reset_cache()` |
+
+**Seed normalisation:** External categories map to canonical POGO categories during ingestion (`classification`/`analysis`/`extraction`/`data_transformation` → `data_analysis`; `creative_writing` → `creative`; `reasoning` → `research`; `summarization`/`translation` → `writing`; `agentic_workflow`/`multimodal` → `general`). Target-model strings normalise to `claude`/`gpt`/`gemini` (e.g. `claude-opus-4-6` → `claude`). The original label is preserved as `subcategory`.
+
+**S3 layout alongside v1 index:**
+
+```
+s3://pogo-knowledge-base/
+├── index/                   # v1 research-paper RAG (UNTOUCHED)
+│   ├── embeddings.npy
+│   └── chunks.pkl
+└── prompt_db/               # v2 prompt database
+    ├── prompts.json
+    └── embeddings.npy
+```
+
+### 10.5 Seed data
+
+**`seed_prompts.json`** — 139 curated prompt examples shipped with the repo. Fields per record: `id`, `task_category`, `target_model`, `techniques_used`, `description`, `prompt_text`, `source`.
+
+**By raw (pre-normalisation) task category:**
 
 | Category | Count |
 |----------|-------|
@@ -478,7 +694,7 @@ A curated collection of **139 high-quality prompt examples** intended for the v2
 | `multimodal` | 6 |
 | `translation` | 1 |
 
-**By target model:**
+**By raw target model:**
 
 | Model | Count |
 |-------|-------|
@@ -486,37 +702,11 @@ A curated collection of **139 high-quality prompt examples** intended for the v2
 | `gemini-3.1-pro` | 45 |
 | `claude-opus-4-6` | 44 |
 
-### prompt_engineering_principles.md
+### 10.6 `prompt_engineering_principles.md`
 
-A **distilled research reference** (~405 lines) that consolidates actionable findings from the knowledge base papers and guides. Organized into sections:
+A distilled research reference (~405 lines) consolidating actionable findings from the knowledge base. Embedded into v2 agent `SYSTEM_PROMPT`s so the research is baked in statically rather than retrieved at request time.
 
-- Structural best practices
-- Chain-of-thought and reasoning findings
-- Few-shot selection criteria
-- Retrieval, grounding, and long-context management
-- Agentic and multi-call techniques
-- Evaluation criteria
-- Robustness and security
-- Common anti-patterns
-- Multimodal-specific principles
-
-This document is intended to be embedded into v2 agent system prompts so that research knowledge is baked in statically rather than retrieved via RAG.
-
-### PLAN.md — v2 Multi-Agent Architecture
-
-A **7-phase implementation plan** (~637 lines) to evolve POGO from a single-call prompt optimizer into a multi-agent conversational pipeline. Phases:
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 1 | Agent system prompts + format profiles | Not started |
-| 2 | Conversation orchestrator (DynamoDB state machine) | Not started |
-| 3 | Prompt database RAG swap (seed_prompts.json ingestion) | Not started |
-| 4 | Guardrails enhancement | Not started |
-| 5 | Frontend chat interface | Not started |
-| 6 | Critic agent with live testing | Not started |
-| 7 | Prompt ingestion loop (flywheel) | Not started |
-
-Planned agents: Prompt Architect, Context Scout, Clarifier, Few-Shot Generator, Critic, Guardrails.
+Sections: structural best practices, chain-of-thought and reasoning, few-shot selection, retrieval/grounding/long-context, agentic and multi-call techniques, evaluation criteria, robustness and security, common anti-patterns, multimodal-specific principles.
 
 ---
 
