@@ -693,9 +693,9 @@ This is the growth flywheel — as more users accept high-quality prompts, the r
 | 1 | Agent system prompts + format profiles | Phase 0 (prep) | Light — mostly writing prompts | ✅ Complete |
 | 2 | Conversation orchestrator | Phase 1 | Heavy — core architecture change | ✅ Complete |
 | 3 | Prompt database RAG swap | Phase 1, 2 | Medium — adapting existing infra | ✅ Complete |
-| 4A | Guardrails — severity levels + new checks | Phase 1 | Light | Not started |
-| 4B | Guardrails — suggest_fixes() | Phase 4A | Light | Not started |
-| 4C | Guardrails — comprehensive tests | Phase 4B | Light | Not started |
+| 4A | Guardrails — severity levels + new checks | Phase 1 | Light | ✅ Complete |
+| 4B | Guardrails — suggest_fixes() | Phase 4A | Light | ✅ Complete |
+| 4C | Guardrails — comprehensive tests | Phase 4B | Light | ✅ Complete |
 | 5A | Frontend — chat interface + API + action buttons | Phase 2 | Medium | Not started |
 | 5B | Frontend — rich message rendering | Phase 5A | Medium | Not started |
 | 5C | Frontend — diff view | Phase 5B | Light | Not started |
