@@ -313,3 +313,159 @@ def check_prompt(prompt: str, target_model: str) -> dict:
         "errors": errors,
         "findings": findings,
     }
+
+
+# ---------------------------------------------------------------------------
+# Fix suggestions — rule-based, maps each finding to a concrete rewrite hint.
+# ---------------------------------------------------------------------------
+
+# Per-phrase rewrites for the vague-instruction check.  The finding message
+# contains the offending phrase in quotes, so we pattern-match on it to pick
+# a targeted suggestion.
+_VAGUE_REWRITES: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(r"do your best", re.IGNORECASE),
+        "Replace 'do your best' with concrete success criteria, "
+        "e.g. 'include at least 3 recommendations and cite every claim with a "
+        "source line number.'",
+    ),
+    (
+        re.compile(r"be creative", re.IGNORECASE),
+        "Replace open-ended 'be creative' with bounded creativity, "
+        "e.g. 'Generate exactly 3 distinct options, each under 100 words, "
+        "written in a conversational tone.'",
+    ),
+    (
+        re.compile(r"as (?:needed|appropriate|necessary)", re.IGNORECASE),
+        "Replace 'as needed/appropriate/necessary' with an explicit condition, "
+        "e.g. 'include a citation only when the claim is quantitative.'",
+    ),
+    (
+        re.compile(r"feel free", re.IGNORECASE),
+        "Replace 'feel free to X' with an imperative, "
+        "e.g. 'Do X when Y; otherwise do Z.'",
+    ),
+    (
+        re.compile(r"try to", re.IGNORECASE),
+        "Replace 'try to X' with a direct imperative, "
+        "e.g. 'X.' or 'Always X unless Y.'",
+    ),
+]
+
+
+def _suggest_vague(message: str) -> str:
+    for pattern, suggestion in _VAGUE_REWRITES:
+        if pattern.search(message):
+            return suggestion
+    return (
+        "Replace vague guidance with concrete criteria — specify what 'good' "
+        "looks like (counts, formats, constraints, examples)."
+    )
+
+
+def _suggest_contradiction(message: str) -> str:
+    """Extract the two quoted phrases (if present) and build a targeted fix."""
+    quoted = re.findall(r'"([^"]+)"', message)
+    if len(quoted) >= 2:
+        return (
+            f"Your prompt contains conflicting instructions: '{quoted[0]}' and "
+            f"'{quoted[1]}'. Remove one, or clarify when each applies "
+            f"(e.g. 'use {quoted[0]} for the summary; {quoted[1]} only in the "
+            f"appendix')."
+        )
+    return (
+        "Your prompt contains conflicting instructions. Identify the two "
+        "competing requirements and either drop one or specify when each "
+        "applies (e.g. 'use JSON for data; markdown only for the summary')."
+    )
+
+
+def _suggest_one(finding: dict, prompt: str) -> str:
+    check = finding.get("check", "")
+    message = finding.get("message", "")
+
+    if check == "empty_prompt":
+        return (
+            "Write a prompt of at least ~100 characters covering: (1) a role "
+            "('You are a...'), (2) the task, (3) relevant context or input, "
+            "and (4) the expected output format."
+        )
+
+    if check == "too_short":
+        return (
+            "Expand the prompt to include: (1) role (e.g. 'You are a senior "
+            "data analyst'), (2) the specific task, (3) any relevant context "
+            "or input data, and (4) the expected output format."
+        )
+
+    if check == "vague_instruction":
+        return _suggest_vague(message)
+
+    if check == "missing_output_format":
+        return (
+            "Specify the expected output format, e.g.: 'Return your analysis "
+            "as a JSON object with keys: summary, findings, recommendations.'"
+        )
+
+    if check == "missing_role":
+        return (
+            "Add a role definition at the start of the prompt, e.g.: "
+            "'You are a senior data analyst specializing in SaaS retention "
+            "metrics.'"
+        )
+
+    if check == "contradiction":
+        return _suggest_contradiction(message)
+
+    if check == "exceeds_context_window":
+        return (
+            "Reduce the prompt size. Move large reference text into retrieval "
+            "chunks or separate messages, summarise verbose context, and "
+            "remove redundant instructions so the prompt fits within the "
+            "model's context window."
+        )
+
+    if check == "large_prompt":
+        return (
+            "Trim the prompt to leave headroom for the response. Move bulky "
+            "documents into tool inputs or few-shot samples, consolidate "
+            "duplicate instructions, and cut illustrative filler."
+        )
+
+    if check == "ambiguous_pronoun":
+        return (
+            "Replace ambiguous pronouns ('it', 'this', 'that', 'they') at "
+            "sentence starts with the specific noun they refer to — "
+            "e.g. 'the user's input', 'the generated summary', or 'the JSON "
+            "response' — so the model can't misread the antecedent."
+        )
+
+    if check == "missing_constraints":
+        return (
+            "Add explicit constraints to the creative request, e.g.: "
+            "'Generate exactly 3 options, each under 100 words, in a "
+            "professional tone suitable for a technical audience.'"
+        )
+
+    if check == "duplicate_instruction":
+        return (
+            "Merge the near-duplicate instructions into a single, clearly-"
+            "worded version. Repeated guidance wastes tokens and can confuse "
+            "the model when the wording drifts between copies."
+        )
+
+    return f"Review and revise: {message}"
+
+
+def suggest_fixes(findings: list[dict], prompt: str) -> list[str]:
+    """Generate a concrete, actionable fix suggestion for each finding.
+
+    Args:
+        findings: The ``findings`` list returned by :func:`check_prompt`.
+        prompt: The original prompt text (used by some checks to inform
+            the suggestion).
+
+    Returns:
+        A list of suggestion strings, one per finding, in the same order.
+    """
+    return [_suggest_one(f, prompt) for f in findings]
