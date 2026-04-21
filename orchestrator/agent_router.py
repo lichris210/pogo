@@ -6,14 +6,21 @@ Reuses the cached Bedrock client pattern from the existing ``lambda/handler.py``
 from __future__ import annotations
 
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import boto3
-
 # Model IDs (same as existing handler for consistency)
-ARCHITECT_MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
-LIGHT_MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+ARCHITECT_MODEL_ID = os.environ.get(
+    "POGO_AGENT_MODEL_ID",
+    "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+)
+LIGHT_MODEL_ID = os.environ.get("POGO_LIGHT_MODEL_ID", ARCHITECT_MODEL_ID)
+_TARGET_MODEL_ENV_KEYS = {
+    "claude": "POGO_TARGET_MODEL_ID_CLAUDE",
+    "gpt": "POGO_TARGET_MODEL_ID_GPT",
+    "gemini": "POGO_TARGET_MODEL_ID_GEMINI",
+}
 
 _bedrock = None
 
@@ -22,6 +29,8 @@ def _get_bedrock():
     """Return a cached ``bedrock-runtime`` client."""
     global _bedrock
     if _bedrock is None:
+        import boto3
+
         _bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
     return _bedrock
 
@@ -85,6 +94,52 @@ def classify_task(user_intent: str) -> str:
 # Bedrock invocation
 # ---------------------------------------------------------------------------
 
+def resolve_target_model_id(target_model: str) -> str:
+    """Return the Bedrock model ID configured for a target-model family.
+
+    Falls back to the orchestrator's default Anthropic model so local
+    development still works when family-specific overrides are unset.
+    """
+    env_key = _TARGET_MODEL_ENV_KEYS.get(target_model)
+    if not env_key:
+        return ARCHITECT_MODEL_ID
+    return os.environ.get(env_key, "").strip() or ARCHITECT_MODEL_ID
+
+
+def invoke_agent_raw(
+    agent_name: str,
+    messages: list[dict],
+    system: str,
+    model_id: str | None = None,
+    max_tokens: int = 2000,
+) -> dict:
+    """Call Bedrock and return assistant text plus usage metadata."""
+    bedrock = _get_bedrock()
+    mid = model_id or ARCHITECT_MODEL_ID
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+
+    response = bedrock.invoke_model(
+        modelId=mid,
+        body=json.dumps(body),
+        contentType="application/json",
+        accept="application/json",
+    )
+    result = json.loads(response["body"].read())
+    usage = _normalise_usage(result.get("usage"))
+    return {
+        "agent_name": agent_name,
+        "model_id": mid,
+        "text": result["content"][0]["text"],
+        "usage": usage,
+    }
+
+
 def invoke_agent(
     agent_name: str,
     messages: list[dict],
@@ -104,24 +159,13 @@ def invoke_agent(
     Returns:
         The model's text response.
     """
-    bedrock = _get_bedrock()
-    mid = model_id or ARCHITECT_MODEL_ID
-
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": messages,
-    }
-
-    response = bedrock.invoke_model(
-        modelId=mid,
-        body=json.dumps(body),
-        contentType="application/json",
-        accept="application/json",
-    )
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"]
+    return invoke_agent_raw(
+        agent_name=agent_name,
+        messages=messages,
+        system=system,
+        model_id=model_id,
+        max_tokens=max_tokens,
+    )["text"]
 
 
 def invoke_parallel(agent_configs: list[dict]) -> list[str]:
@@ -228,3 +272,48 @@ def fetch_fewshot_examples(
     except Exception as e:
         print(f"agent_router.fetch_fewshot_examples: retrieval failed ({e})")
         return []
+
+
+def run_critic_review(
+    final_prompt: str,
+    task_category: str,
+    format_profile: dict,
+    target_model: str,
+    *,
+    k: int = 3,
+) -> dict:
+    """Invoke the Critic with retrieved reference prompts for comparison."""
+    from agents import critic
+
+    reference_prompts = fetch_reference_prompts(task_category, target_model, k=k)
+    messages, system = critic.build_messages(
+        final_prompt=final_prompt,
+        task_category=task_category,
+        format_profile=format_profile,
+        reference_prompts=reference_prompts,
+    )
+    response = invoke_agent("critic", messages, system)
+    return {
+        "response": response,
+        "scores": critic.parse_scores(response),
+        "suggestions": critic.parse_suggestions(response),
+        "reference_prompts": reference_prompts,
+    }
+
+
+def _normalise_usage(raw_usage: dict | None) -> dict:
+    """Return a consistent usage dict even when the provider omits fields."""
+    if not isinstance(raw_usage, dict):
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    input_tokens = int(raw_usage.get("input_tokens", 0) or 0)
+    output_tokens = int(raw_usage.get("output_tokens", 0) or 0)
+    total_tokens = int(raw_usage.get("total_tokens", 0) or 0)
+    if not total_tokens:
+        total_tokens = input_tokens + output_tokens
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }

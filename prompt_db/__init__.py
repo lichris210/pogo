@@ -7,9 +7,11 @@ task category on behalf of the agent pipeline.
 Entry points::
 
     from prompt_db.ingest import ingest_seed_data, ingest_single_prompt
+    from prompt_db.admin import list_prompts, remove_prompt, update_score
     from prompt_db.retrieve import (
         retrieve_reference_prompts,
         retrieve_few_shot_examples,
+        retrieve_similar_prompts,
     )
     from prompt_db.schema import PromptRecord, to_embedding_text
 """

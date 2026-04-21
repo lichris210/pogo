@@ -289,6 +289,83 @@ class TestIngestAndRetrieve(unittest.TestCase):
         self.assertEqual(after_records[-1].id, "user_test_001")
         self.assertEqual(after_emb.shape[0], before_count + 1)
 
+    def test_ingest_single_prompt_skips_near_duplicate(self):
+        from prompt_db.ingest import ingest_single_prompt
+        from prompt_db.retrieve import reset_cache
+        from prompt_db.store import load
+
+        before_records, before_emb = load()
+        before_count = len(before_records)
+        template = before_records[0]
+
+        duplicate = PromptRecord(
+            id="user_test_duplicate",
+            task_category=template.task_category,
+            subcategory=template.subcategory,
+            target_model=template.target_model,
+            format=template.format,
+            techniques=list(template.techniques),
+            system_prompt=template.system_prompt,
+            user_prompt_template=template.user_prompt_template,
+            few_shot_examples=list(template.few_shot_examples),
+            quality_score=template.quality_score,
+            source="user_generated",
+        )
+
+        ok = ingest_single_prompt(duplicate)
+        self.assertFalse(ok)
+
+        reset_cache()
+        after_records, after_emb = load()
+        self.assertEqual(len(after_records), before_count)
+        self.assertEqual(after_emb.shape[0], before_emb.shape[0])
+
+    def test_retrieve_similar_prompts(self):
+        from prompt_db.retrieve import retrieve_similar_prompts
+
+        text = "Task category: writing. Subcategory: email. Target model: claude."
+        result = retrieve_similar_prompts(text, k=3, target_model="claude")
+
+        self.assertLessEqual(len(result), 3)
+        for record, similarity in result:
+            self.assertEqual(record.target_model, "claude")
+            self.assertIsInstance(similarity, float)
+
+    def test_admin_list_update_and_remove(self):
+        from prompt_db.admin import list_prompts, remove_prompt, update_score
+        from prompt_db.ingest import ingest_single_prompt
+        from prompt_db.retrieve import reset_cache
+        from prompt_db.store import load
+
+        target = PromptRecord(
+            id="user_admin_test",
+            task_category="writing",
+            subcategory="email",
+            target_model="claude",
+            format="xml",
+            techniques=["role_assignment"],
+            system_prompt="You are a support email assistant.",
+            user_prompt_template="Write a customer email about {{INCIDENT}}.",
+            quality_score=0.91,
+            source="user_generated",
+        )
+        self.assertTrue(ingest_single_prompt(target))
+
+        writing_prompts = list_prompts(task_category="writing", source="user_generated")
+        self.assertIn(target.id, {r.id for r in writing_prompts})
+
+        self.assertTrue(update_score(target.id, 0.42))
+
+        reset_cache()
+        records, _ = load()
+        updated = next(r for r in records if r.id == target.id)
+        self.assertEqual(updated.quality_score, 0.42)
+
+        self.assertTrue(remove_prompt(target.id))
+        reset_cache()
+        records_after_remove, _ = load()
+        self.assertNotIn(target.id, {r.id for r in records_after_remove})
+
 
 # ---------------------------------------------------------------------------
 # Fallback behaviour when the store is empty.

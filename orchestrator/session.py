@@ -10,9 +10,6 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 
-import boto3
-from botocore.exceptions import ClientError
-
 SESSIONS_TABLE = "pogo-sessions"
 
 _dynamodb = None
@@ -22,6 +19,8 @@ def _get_table():
     """Return a cached DynamoDB Table resource."""
     global _dynamodb
     if _dynamodb is None:
+        import boto3
+
         _dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
     return _dynamodb.Table(SESSIONS_TABLE)
 
@@ -44,11 +43,14 @@ class Session:
     state: str = "initial"
     user_intent: str = ""
     task_category: str = ""
+    subcategory: str = ""
     conversation_history: list[dict] = field(default_factory=list)
     current_draft: str = ""
+    fewshot_examples: str = ""
     user_context: dict = field(default_factory=dict)
     clarification_answers: dict = field(default_factory=dict)
     scores: dict = field(default_factory=dict)
+    ingested: bool = False
     created_at: str = ""
     updated_at: str = ""
 
@@ -138,7 +140,7 @@ def load_session(session_id: str) -> Session | None:
     table = _get_table()
     try:
         resp = table.get_item(Key={"session_id": session_id})
-    except ClientError:
+    except Exception:
         return None
     item = resp.get("Item")
     if item is None:

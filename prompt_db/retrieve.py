@@ -11,6 +11,8 @@ Public API:
   prompts filtered by target model.
 - :func:`retrieve_few_shot_examples` — few-shot example dicts pulled
   from records that have non-empty ``few_shot_examples``.
+- :func:`retrieve_similar_prompts` — top-k nearest prompts for an
+  arbitrary embedding-text query, including cosine similarity scores.
 
 Both helpers are resilient: if the store is empty or AWS is unreachable
 (e.g. in local unit tests), they log a warning and return ``[]``.
@@ -160,3 +162,52 @@ def retrieve_few_shot_examples(
             if len(examples) >= k:
                 return examples
     return examples
+
+
+def retrieve_similar_prompts(
+    query_text: str,
+    *,
+    k: int = 3,
+    task_category: str | None = None,
+    target_model: str | None = None,
+) -> list[tuple[PromptRecord, float]]:
+    """Return the nearest stored prompts for *query_text*.
+
+    Args:
+        query_text: Arbitrary text to embed and compare against the store.
+        k: Number of neighbors to return.
+        task_category: Optional filter on ``PromptRecord.task_category``.
+        target_model: Optional filter on ``PromptRecord.target_model``.
+
+    Returns:
+        A best-first list of ``(PromptRecord, cosine_similarity)`` tuples.
+        Returns ``[]`` if the store is empty or the embedding call fails.
+    """
+    records, embeddings = _load_cached()
+    if not records or embeddings.size == 0:
+        return []
+
+    idx_keep: list[int] = []
+    for idx, record in enumerate(records):
+        if task_category and record.task_category != task_category:
+            continue
+        if target_model and record.target_model != target_model:
+            continue
+        idx_keep.append(idx)
+
+    if not idx_keep:
+        return []
+
+    try:
+        query_vec = embed_text(query_text)
+    except Exception as e:
+        print(f"retrieve_similar_prompts: embedding failed ({e})")
+        return []
+
+    filtered_emb = embeddings[idx_keep]
+    sims = filtered_emb @ query_vec
+    order = np.argsort(sims)[::-1][:k]
+    return [
+        (records[idx_keep[i]], float(sims[i]))
+        for i in order
+    ]

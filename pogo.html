@@ -299,6 +299,334 @@
   .draft-card pre::-webkit-scrollbar-track { background: transparent; }
   .draft-card pre::-webkit-scrollbar-thumb { background: #27272A; border-radius: 2px; }
 
+  .render-block { margin-bottom: 10px; }
+  .render-block:last-child { margin-bottom: 0; }
+
+  .prompt-card {
+    margin: 10px 0;
+    overflow: hidden;
+  }
+  .prompt-card .draft-header,
+  .prompt-card .final-header {
+    gap: 12px;
+  }
+  .prompt-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .prompt-format-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid #27272A;
+    color: #71717A;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .prompt-card .mini-copy-btn { flex-shrink: 0; }
+  .prompt-techniques {
+    padding: 10px 16px 14px;
+    border-top: 1px solid #1C1C1F;
+    color: #A1A1AA;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .prompt-tech-label {
+    display: inline-block;
+    margin-right: 6px;
+    color: #FAFAFA;
+    font-weight: 600;
+  }
+  .prompt-markdown-body {
+    padding: 16px;
+    background: #0C0C0E;
+  }
+  .prompt-markdown-body .msg-text {
+    color: #D4D4D8;
+    margin-bottom: 10px;
+  }
+  .prompt-markdown-body .msg-text:last-child { margin-bottom: 0; }
+  .prompt-markdown-body .msg-text strong { color: #FAFAFA; }
+  .prompt-markdown-body .msg-text code {
+    background: #18181B;
+    color: #E4E4E7;
+  }
+  .prompt-markdown-body .msg-text ul,
+  .prompt-markdown-body .msg-text ol {
+    color: #D4D4D8;
+  }
+  .prompt-markdown-body .md-heading {
+    display: block;
+    color: #FAFAFA;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .prompt-markdown-body .md-h1 { font-size: 18px; }
+  .prompt-markdown-body .md-h2 { font-size: 16px; }
+  .prompt-markdown-body .md-h3,
+  .prompt-markdown-body .md-h4,
+  .prompt-markdown-body .md-h5,
+  .prompt-markdown-body .md-h6 { font-size: 14px; }
+  .xml-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.75;
+    color: #D4D4D8;
+    padding: 16px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  .tok-punct { color: #71717A; }
+  .tok-tag { color: #F59E0B; }
+  .tok-attr { color: #38BDF8; }
+  .tok-string { color: #86EFAC; }
+  .tok-text { color: #D4D4D8; }
+
+  .guardrail-banner {
+    border-radius: 10px;
+    border: 1px solid;
+    padding: 12px 14px;
+    margin: 10px 0;
+    background: #0F0F12;
+  }
+  .guardrail-banner.warning {
+    border-color: #713F12;
+    background: rgba(120, 53, 15, 0.12);
+  }
+  .guardrail-banner.error {
+    border-color: #7F1D1D;
+    background: rgba(127, 29, 29, 0.16);
+  }
+  .guardrail-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .guardrail-banner.warning .guardrail-title { color: #FBBF24; }
+  .guardrail-banner.error .guardrail-title { color: #F87171; }
+  .guardrail-list {
+    margin: 0 0 0 18px;
+    color: #E4E4E7;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .guardrail-list li + li { margin-top: 6px; }
+
+  .info-card {
+    margin: 10px 0;
+    border: 1px solid #1C1C1F;
+    border-radius: 10px;
+    background: #0C0C0E;
+    overflow: hidden;
+  }
+  .info-card-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1C1C1F;
+  }
+  .info-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #FAFAFA;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .context-list,
+  .question-list,
+  .suggestion-list {
+    padding: 10px 14px 14px;
+  }
+  .context-item,
+  .question-item,
+  .suggestion-item {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 10px 0;
+    border-bottom: 1px solid #18181B;
+  }
+  .context-item:last-child,
+  .question-item:last-child,
+  .suggestion-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .context-item:first-child,
+  .question-item:first-child,
+  .suggestion-item:first-child { padding-top: 0; }
+  .context-check {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid #3F3F46;
+    background: #09090B;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .suggestion-marker {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: #18181B;
+    border: 1px solid #27272A;
+    color: #A1A1AA;
+    font-size: 11px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .question-number {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: #18181B;
+    border: 1px solid #27272A;
+    color: #FAFAFA;
+    font-size: 11px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .item-main {
+    color: #FAFAFA;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .item-detail {
+    color: #A1A1AA;
+    font-size: 12px;
+    line-height: 1.55;
+    margin-top: 4px;
+  }
+
+  .scorecard {
+    margin: 10px 0;
+    border: 1px solid #1C1C1F;
+    border-radius: 10px;
+    background: #0C0C0E;
+    overflow: hidden;
+  }
+  .scorecard-body {
+    padding: 10px 14px 14px;
+  }
+  .score-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 170px) 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 0;
+  }
+  .score-row + .score-row { border-top: 1px solid #18181B; }
+  .score-label {
+    color: #D4D4D8;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .score-track {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #18181B;
+    overflow: hidden;
+  }
+  .score-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #71717A 0%, #FAFAFA 100%);
+  }
+  .score-fill.tone-good {
+    background: linear-gradient(90deg, #22C55E 0%, #86EFAC 100%);
+  }
+  .score-fill.tone-mid {
+    background: linear-gradient(90deg, #F59E0B 0%, #FDE68A 100%);
+  }
+  .score-fill.tone-low {
+    background: linear-gradient(90deg, #EF4444 0%, #FCA5A5 100%);
+  }
+  .score-value {
+    color: #FAFAFA;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .sample-panel {
+    margin: 10px 0;
+    border: 1px solid #27272A;
+    border-radius: 10px;
+    background: #111114;
+    overflow: hidden;
+  }
+  .sample-panel summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px 14px;
+    color: #FAFAFA;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .sample-panel summary::-webkit-details-marker { display: none; }
+  .sample-panel summary::after {
+    content: 'Show';
+    float: right;
+    color: #71717A;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .sample-panel[open] summary::after { content: 'Hide'; }
+  .sample-panel-body {
+    padding: 0 14px 14px;
+    border-top: 1px solid #1C1C1F;
+  }
+  .sample-panel pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #D4D4D8;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    padding-top: 14px;
+  }
+  .sample-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 14px;
+  }
+  .sample-meta-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid #27272A;
+    background: #0C0C0E;
+    color: #A1A1AA;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
   /* --- Final prompt card (accepted state) --- */
   .final-card {
     margin: 10px 0;
@@ -698,11 +1026,12 @@ function addAssistantMessage(data) {
 
   const msgText = data.message || "";
   const state = data.state;
-  const scores = data.scores;
-  const sampleOutput = data.sample_output;
   const draft = data.prompt_draft;
+  const renderBlocks = Array.isArray(data.render_blocks) ? data.render_blocks : [];
 
-  if (state === "accepted" && draft) {
+  if (renderBlocks.length > 0) {
+    bubble.appendChild(renderTypedBlocks(renderBlocks));
+  } else if (state === "accepted" && draft) {
     // Render text before the prompt fence (strip it from message)
     const textBefore = msgText.replace(/```[\s\S]*?```/g, "").trim();
     if (textBefore) {
@@ -713,8 +1042,9 @@ function addAssistantMessage(data) {
     bubble.appendChild(renderMarkdown(msgText));
   }
 
-  // Score chips
-  if (scores && typeof scores === "object") {
+  // Legacy score chips for older payloads without render blocks.
+  if (renderBlocks.length === 0 && data.scores && typeof data.scores === "object") {
+    const scores = data.scores;
     const hasScores = SCORE_KEYS.some(k => typeof scores[k] === "number" && scores[k] >= 0);
     if (hasScores) {
       const scoresRow = document.createElement("div");
@@ -733,7 +1063,7 @@ function addAssistantMessage(data) {
   }
 
   // Action buttons
-  const actions = getActions(state);
+  const actions = getActions(state, data);
   if (actions.length > 0) {
     const bar = document.createElement("div");
     bar.className = "action-bar";
@@ -763,10 +1093,395 @@ function addErrorBanner(text) {
   scrollToBottom();
 }
 
+function renderTypedBlocks(blocks) {
+  const frag = document.createDocumentFragment();
+  blocks.forEach(block => {
+    const el = renderTypedBlock(block);
+    if (el) frag.appendChild(el);
+  });
+  return frag;
+}
+
+function renderTypedBlock(block) {
+  if (!block || typeof block !== "object") return null;
+
+  switch (block.type) {
+    case "text":
+      return renderTextBlock(block.text);
+    case "prompt_draft":
+      return renderPromptCard(block);
+    case "final_prompt":
+      return renderPromptCard(block);
+    case "context_checklist":
+      return renderChecklistBlock(block);
+    case "clarifier_questions":
+      return renderQuestionListBlock(block);
+    case "fewshot_examples":
+      return renderFewshotBlock(block);
+    case "guardrail_banner":
+      return renderGuardrailBanner(block);
+    case "scorecard":
+      return renderScorecardBlock(block);
+    case "suggestions_list":
+      return renderSuggestionListBlock(block);
+    case "sample_input":
+    case "sample_output":
+      return renderSamplePanelBlock(block);
+    default:
+      return null;
+  }
+}
+
+function renderTextBlock(text) {
+  if (!text || !String(text).trim()) return null;
+  const el = document.createElement("div");
+  el.className = "render-block";
+  el.appendChild(renderMarkdown(String(text)));
+  return el;
+}
+
+function renderPromptCard(block) {
+  const isFinal = block.type === "final_prompt";
+  const format = block.format || "markdown";
+  const promptText = block.prompt || "";
+
+  const card = document.createElement("div");
+  card.className = `${isFinal ? "final-card" : "draft-card"} prompt-card render-block ${format === "xml" ? "prompt-xml" : "prompt-markdown"}`;
+
+  const header = document.createElement("div");
+  header.className = isFinal ? "final-header" : "draft-header";
+
+  const meta = document.createElement("div");
+  meta.className = "prompt-header-meta";
+
+  const label = document.createElement("span");
+  label.className = isFinal ? "final-label" : "draft-label";
+  label.textContent = block.title || (isFinal ? "Final Prompt" : "Prompt");
+
+  const pill = document.createElement("span");
+  pill.className = "prompt-format-pill";
+  pill.textContent = format;
+
+  meta.appendChild(label);
+  meta.appendChild(pill);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "mini-copy-btn";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(promptText);
+    copyBtn.textContent = "Copied";
+    setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+  });
+
+  header.appendChild(meta);
+  header.appendChild(copyBtn);
+  card.appendChild(header);
+
+  if (format === "xml") {
+    const pre = document.createElement("pre");
+    pre.className = "xml-code";
+    pre.innerHTML = highlightXml(promptText);
+    card.appendChild(pre);
+  } else {
+    const body = document.createElement("div");
+    body.className = "prompt-markdown-body";
+    body.appendChild(renderMarkdown(promptText));
+    card.appendChild(body);
+  }
+
+  if (block.techniques_text) {
+    const footer = document.createElement("div");
+    footer.className = "prompt-techniques";
+    footer.innerHTML = `<span class="prompt-tech-label">Techniques applied</span>${escapeHtml(block.techniques_text)}`;
+    card.appendChild(footer);
+  }
+
+  return card;
+}
+
+function renderChecklistBlock(block) {
+  const section = makeInfoCard(block.title || "Context to provide");
+  const body = section.querySelector(".info-card-body");
+  body.classList.add("context-list");
+
+  (block.items || []).forEach(item => {
+    const row = document.createElement("div");
+    row.className = "context-item";
+
+    const check = document.createElement("span");
+    check.className = "context-check";
+
+    const copy = document.createElement("div");
+    const parts = splitItemParts(item);
+
+    const main = document.createElement("div");
+    main.className = "item-main";
+    main.textContent = parts.main;
+    copy.appendChild(main);
+
+    if (parts.detail) {
+      const detail = document.createElement("div");
+      detail.className = "item-detail";
+      detail.textContent = parts.detail;
+      copy.appendChild(detail);
+    }
+
+    row.appendChild(check);
+    row.appendChild(copy);
+    body.appendChild(row);
+  });
+
+  return section;
+}
+
+function renderQuestionListBlock(block) {
+  const section = makeInfoCard(block.title || "Questions");
+  const body = section.querySelector(".info-card-body");
+  body.classList.add("question-list");
+
+  (block.items || []).forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "question-item";
+
+    const number = document.createElement("span");
+    number.className = "question-number";
+    number.textContent = index + 1;
+
+    const copy = document.createElement("div");
+    const parts = splitItemParts(item);
+
+    const main = document.createElement("div");
+    main.className = "item-main";
+    main.textContent = parts.main;
+    copy.appendChild(main);
+
+    if (parts.detail) {
+      const detail = document.createElement("div");
+      detail.className = "item-detail";
+      detail.textContent = parts.detail;
+      copy.appendChild(detail);
+    }
+
+    row.appendChild(number);
+    row.appendChild(copy);
+    body.appendChild(row);
+  });
+
+  return section;
+}
+
+function renderSuggestionListBlock(block) {
+  const section = makeInfoCard(block.title || "Specific improvements");
+  const body = section.querySelector(".info-card-body");
+  body.classList.add("suggestion-list");
+
+  (block.items || []).forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "suggestion-item";
+
+    const marker = document.createElement("span");
+    marker.className = "suggestion-marker";
+    marker.textContent = index + 1;
+
+    const copy = document.createElement("div");
+    const main = document.createElement("div");
+    main.className = "item-main";
+    main.textContent = item;
+    copy.appendChild(main);
+
+    row.appendChild(marker);
+    row.appendChild(copy);
+    body.appendChild(row);
+  });
+
+  return section;
+}
+
+function renderFewshotBlock(block) {
+  const section = makeInfoCard(block.title || "Few-shot examples");
+  const body = section.querySelector(".info-card-body");
+  body.classList.add("prompt-markdown-body");
+  body.appendChild(renderMarkdown(block.text || ""));
+  return section;
+}
+
+function renderGuardrailBanner(block) {
+  const banner = document.createElement("div");
+  const severity = block.severity === "error" ? "error" : "warning";
+  banner.className = `guardrail-banner ${severity} render-block`;
+
+  const title = document.createElement("div");
+  title.className = "guardrail-title";
+  title.textContent = severity === "error"
+    ? "Guardrail errors"
+    : "Guardrail warnings";
+
+  const list = document.createElement("ul");
+  list.className = "guardrail-list";
+  (block.items || []).forEach(item => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    list.appendChild(li);
+  });
+
+  banner.appendChild(title);
+  banner.appendChild(list);
+  return banner;
+}
+
+function renderScorecardBlock(block) {
+  const card = document.createElement("div");
+  card.className = "scorecard render-block";
+
+  const header = document.createElement("div");
+  header.className = "info-card-header";
+
+  const title = document.createElement("div");
+  title.className = "info-card-title";
+  title.textContent = block.title || "Prompt Evaluation";
+
+  header.appendChild(title);
+  card.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "scorecard-body";
+
+  SCORE_KEYS.forEach(key => {
+    const val = block.scores ? block.scores[key] : null;
+    if (typeof val !== "number" || val < 0) return;
+
+    const row = document.createElement("div");
+    row.className = "score-row";
+
+    const label = document.createElement("div");
+    label.className = "score-label";
+    label.textContent = key === "hallucination_risk"
+      ? "Hallucination risk (lower is better)"
+      : key.replace(/_/g, " ");
+
+    const track = document.createElement("div");
+    track.className = "score-track";
+
+    const fill = document.createElement("div");
+    fill.className = `score-fill ${getScoreTone(key, val)}`;
+    fill.style.width = `${Math.max(0, Math.min(val, 10)) * 10}%`;
+    track.appendChild(fill);
+
+    const value = document.createElement("div");
+    value.className = "score-value";
+    value.textContent = `${val}/10`;
+
+    row.appendChild(label);
+    row.appendChild(track);
+    row.appendChild(value);
+    body.appendChild(row);
+  });
+
+  card.appendChild(body);
+  return card;
+}
+
+function renderSamplePanelBlock(block) {
+  const details = document.createElement("details");
+  details.className = "sample-panel render-block";
+  if (!block.collapsed_by_default) details.open = true;
+
+  const summary = document.createElement("summary");
+  summary.textContent = block.title || "Sample output";
+
+  const body = document.createElement("div");
+  body.className = "sample-panel-body";
+
+  const pre = document.createElement("pre");
+  pre.textContent = block.text || "";
+  body.appendChild(pre);
+
+  const meta = [];
+  if (typeof block.latency_ms === "number") meta.push(`latency ${block.latency_ms} ms`);
+  if (typeof block.tokens_used === "number") meta.push(`tokens ${block.tokens_used}`);
+  if (meta.length > 0) {
+    const metaRow = document.createElement("div");
+    metaRow.className = "sample-meta";
+    meta.forEach(value => {
+      const chip = document.createElement("span");
+      chip.className = "sample-meta-chip";
+      chip.textContent = value;
+      metaRow.appendChild(chip);
+    });
+    body.appendChild(metaRow);
+  }
+
+  details.appendChild(summary);
+  details.appendChild(body);
+  return details;
+}
+
+function makeInfoCard(title) {
+  const card = document.createElement("div");
+  card.className = "info-card render-block";
+
+  const header = document.createElement("div");
+  header.className = "info-card-header";
+
+  const label = document.createElement("div");
+  label.className = "info-card-title";
+  label.textContent = title;
+  header.appendChild(label);
+
+  const body = document.createElement("div");
+  body.className = "info-card-body";
+
+  card.appendChild(header);
+  card.appendChild(body);
+  return card;
+}
+
+function splitItemParts(item) {
+  const lines = String(item || "")
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  let main = lines.shift() || "";
+  let detail = lines.join(" ");
+
+  if (!detail) {
+    const whyMatch = main.match(/^(.*?)(?:\s+Why:\s+)(.+)$/i);
+    if (whyMatch) {
+      main = whyMatch[1].trim();
+      detail = `Why: ${whyMatch[2].trim()}`;
+    }
+  }
+
+  if (!detail) {
+    const parenMatch = main.match(/^(.*?)(?:\s+\((.+)\))$/);
+    if (parenMatch) {
+      main = parenMatch[1].trim();
+      detail = parenMatch[2].trim();
+    }
+  }
+
+  return { main, detail };
+}
+
+function getScoreTone(key, value) {
+  const normalized = key === "hallucination_risk" ? 10 - value : value;
+  if (normalized >= 8) return "tone-good";
+  if (normalized >= 5) return "tone-mid";
+  return "tone-low";
+}
+
 // -------------------------------------------------------------------------
 // Action buttons per state
 // -------------------------------------------------------------------------
-function getActions(state) {
+function getActions(state, data = {}) {
+  const canRunManualTest = (
+    (state === "review" || state === "iterating") &&
+    data.live_testing_enabled === false &&
+    !hasSampleOutput(data.sample_output)
+  );
+
   if (state === "awaiting_context") {
     return [
       {
@@ -785,7 +1500,7 @@ function getActions(state) {
     ];
   }
   if (state === "review") {
-    return [
+    const actions = [
       {
         label: "Accept this prompt",
         primary: true,
@@ -800,9 +1515,17 @@ function getActions(state) {
         },
       },
     ];
+    if (canRunManualTest) {
+      actions.splice(1, 0, {
+        label: "Test this prompt",
+        primary: false,
+        onClick: () => sendMessage("Run a live test for this prompt.", { runLiveTest: true }),
+      });
+    }
+    return actions;
   }
   if (state === "iterating") {
-    return [
+    const actions = [
       {
         label: "Accept this prompt",
         primary: true,
@@ -817,6 +1540,14 @@ function getActions(state) {
         },
       },
     ];
+    if (canRunManualTest) {
+      actions.splice(1, 0, {
+        label: "Test this prompt",
+        primary: false,
+        onClick: () => sendMessage("Run a live test for this prompt.", { runLiveTest: true }),
+      });
+    }
+    return actions;
   }
   if (state === "accepted") {
     return [
@@ -844,6 +1575,13 @@ function getActions(state) {
   return [];
 }
 
+function hasSampleOutput(sampleOutput) {
+  if (!sampleOutput) return false;
+  if (typeof sampleOutput === "string") return sampleOutput.trim().length > 0;
+  if (typeof sampleOutput === "object") return String(sampleOutput.output || "").trim().length > 0;
+  return false;
+}
+
 // -------------------------------------------------------------------------
 // Markdown-ish renderer (handles code fences, bold, hr, lists)
 // -------------------------------------------------------------------------
@@ -869,13 +1607,16 @@ function renderMarkdown(text) {
 }
 
 function inlineMarkdown(text) {
-  let html = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  let html = escapeHtml(text);
 
   // Horizontal rules
   html = html.replace(/^---$/gm, "<hr>");
+
+  // Headings
+  html = html.replace(/^(#{1,6})\s+(.+)$/gm, (_, hashes, value) => {
+    const level = Math.min(hashes.length, 6);
+    return `<span class="md-heading md-h${level}">${value}</span>`;
+  });
 
   // Bold
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -891,14 +1632,44 @@ function inlineMarkdown(text) {
     return "<ul>" + items + "</ul>";
   });
 
+  // Numbered list blocks
+  html = html.replace(/(?:^|\n)((?:\s{0,4}\d+\.\s+.+(?:\n|$))+)/g, (_, block) => {
+    const items = block.trim().split(/\n/).map(line =>
+      "<li>" + line.replace(/^\s*\d+\.\s+/, "") + "</li>"
+    ).join("");
+    return "<ol>" + items + "</ol>";
+  });
+
   // Newlines → <br> (but not inside tags we just created)
   html = html.replace(/\n/g, "<br>");
 
   // Clean up <br> adjacent to block elements
   html = html.replace(/<br>\s*(<(?:hr|ul|\/ul|li|\/li))/g, "$1");
   html = html.replace(/(<\/(?:ul|hr)>)\s*<br>/g, "$1");
+  html = html.replace(/<br>\s*(<(?:ol|\/ol))/g, "$1");
+  html = html.replace(/(<\/ol>)\s*<br>/g, "$1");
 
   return html;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function highlightXml(text) {
+  const escaped = escapeHtml(text);
+  return escaped.replace(/(&lt;\/?)([A-Za-z_][\w:.-]*)([\s\S]*?)(\/?&gt;)/g, (_, open, tag, attrs, close) => {
+    const highlightedAttrs = attrs.replace(
+      /([A-Za-z_:][\w:.-]*)(=)(&quot;.*?&quot;)/g,
+      '<span class="tok-attr">$1</span>$2<span class="tok-string">$3</span>'
+    );
+    return `<span class="tok-punct">${open}</span><span class="tok-tag">${tag}</span>${highlightedAttrs}<span class="tok-punct">${close}</span>`;
+  });
 }
 
 // -------------------------------------------------------------------------
@@ -970,7 +1741,7 @@ function sendCurrentMessage() {
   sendMessage(text);
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, options = {}) {
   if (isLoading) return;
 
   addUserMessage(text);
@@ -988,6 +1759,7 @@ async function sendMessage(text) {
       message: text,
       target_model: selectedModel,
     };
+    if (options.runLiveTest === true) payload.run_live_test = true;
     if (sessionId) payload.session_id = sessionId;
 
     const res = await fetch(API_URL, {

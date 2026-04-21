@@ -6,13 +6,14 @@ multi-agent pipeline described in PLAN.md.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import re
 
 from agents import (
     clarifier,
     context_scout,
-    critic,
     fewshot_generator,
     format_profiles,
     guardrails,
@@ -24,7 +25,9 @@ from orchestrator.agent_router import (
     fetch_reference_prompts,
     invoke_agent,
     invoke_parallel,
+    run_critic_review,
 )
+from orchestrator.live_test import run_live_test
 from orchestrator.response_merger import (
     format_accepted,
     merge_draft_scout_clarifier,
@@ -58,7 +61,8 @@ def handle_message(event: dict) -> dict:
         {
             "session_id": "... (omit for first message)",
             "message": "user's text",
-            "target_model": "claude|gpt|gemini"
+            "target_model": "claude|gpt|gemini",
+            "run_live_test": true|false (optional)
         }
 
     Returns an API-Gateway-shaped dict (statusCode, headers, body).
@@ -67,6 +71,7 @@ def handle_message(event: dict) -> dict:
         body = json.loads(event.get("body", "{}"))
         message = body.get("message", "").strip()
         target_model = body.get("target_model", "claude").strip().lower()
+        run_live_test_requested = _coerce_optional_bool(body.get("run_live_test"))
         session_id = body.get("session_id")
         user_id = body.get("user_id", "anonymous")
 
@@ -94,9 +99,9 @@ def handle_message(event: dict) -> dict:
         elif state == "awaiting_context":
             result = _handle_awaiting_context(session, message)
         elif state == "review":
-            result = _handle_review(session, message)
+            result = _handle_review(session, message, run_live_test_requested)
         elif state == "iterating":
-            result = _handle_iterating(session, message)
+            result = _handle_iterating(session, message, run_live_test_requested)
         elif state == "accepted":
             result = _handle_accepted(session)
         else:
@@ -123,9 +128,11 @@ def handle_message(event: dict) -> dict:
 def _handle_initial(session: Session, message: str) -> dict:
     """STATE: initial — first message. Draft + scout + clarifier."""
     profile = format_profiles.FORMAT_PROFILES[session.target_model]
+    prompt_format = _prompt_format(profile)
 
     # 1. Classify task
     session.task_category = classify_task(message)
+    session.subcategory = session.task_category
     session.user_intent = message
 
     # 2. Prompt Architect — draft (with reference prompts from the DB)
@@ -166,17 +173,27 @@ def _handle_initial(session: Session, message: str) -> dict:
     ])
 
     # 5. Merge
-    merged = merge_draft_scout_clarifier(draft_response, scout_response, clarifier_response)
+    merged = merge_draft_scout_clarifier(
+        draft_response,
+        scout_response,
+        clarifier_response,
+        prompt_format=prompt_format,
+    )
 
     # 6. Transition
     session.state = "awaiting_context"
 
-    return _response(session, merged)
+    return _response(
+        session,
+        merged["message"],
+        render_blocks=merged["render_blocks"],
+    )
 
 
 def _handle_awaiting_context(session: Session, message: str) -> dict:
     """STATE: awaiting_context — user supplied answers / context."""
     profile = format_profiles.FORMAT_PROFILES[session.target_model]
+    prompt_format = _prompt_format(profile)
 
     # Store the user's reply as accumulated context
     session.clarification_answers[f"reply_{len(session.clarification_answers) + 1}"] = message
@@ -218,62 +235,60 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
     # 3. Update draft
     from orchestrator.response_merger import _extract_prompt_block
     session.current_draft = _extract_prompt_block(refined_response)
+    session.fewshot_examples = fewshot_response.strip()
 
     # 4. Guardrails
     gr = guardrails.check_prompt(session.current_draft, session.target_model)
 
     # 5. Merge
-    merged = merge_refinement(refined_response, fewshot_response, gr)
+    merged = merge_refinement(
+        refined_response,
+        fewshot_response,
+        gr,
+        prompt_format=prompt_format,
+    )
 
     # 6. Transition
     if gr["passed"]:
         session.state = "review"
     # else stay in awaiting_context so user can fix
 
-    return _response(session, merged)
+    return _response(
+        session,
+        merged["message"],
+        render_blocks=merged["render_blocks"],
+    )
 
 
-def _handle_review(session: Session, message: str) -> dict:
+def _handle_review(
+    session: Session,
+    message: str,
+    run_live_test_requested: bool | None = None,
+) -> dict:
     """STATE: review — run critic (and optional live test)."""
-    profile = format_profiles.FORMAT_PROFILES[session.target_model]
-
     # Check if user wants to accept directly
     if message.strip().lower() in ("accept", "accepted", "looks good", "done", "yes"):
         return _handle_accepted(session)
 
-    # 1. Critic (with high-scoring reference prompts for comparison)
-    reference_prompts = fetch_reference_prompts(
-        session.task_category, session.target_model, k=3
-    )
-    crit_msgs, crit_sys = critic.build_messages(
-        final_prompt=session.current_draft,
-        task_category=session.task_category,
-        format_profile=profile,
-        reference_prompts=reference_prompts,
-    )
-    critic_response = invoke_agent("critic", crit_msgs, crit_sys)
-    scores = critic.parse_scores(critic_response)
-    session.scores = scores
-
-    # 2. Optional live test (simple: send the draft to the target model)
-    sample_output = _run_live_test(session.current_draft, session.target_model)
-
-    # 3. Merge
-    merged = merge_review(critic_response, scores, sample_output)
-
-    # 4. Transition — user decides next
-    session.state = "iterating"
-
-    return _response(session, merged, scores=scores, sample_output=sample_output)
+    should_run_live_test = _live_testing_enabled() or bool(run_live_test_requested)
+    return _evaluate_review(session, should_run_live_test=should_run_live_test)
 
 
-def _handle_iterating(session: Session, message: str) -> dict:
+def _handle_iterating(
+    session: Session,
+    message: str,
+    run_live_test_requested: bool | None = None,
+) -> dict:
     """STATE: iterating — user requested changes."""
     profile = format_profiles.FORMAT_PROFILES[session.target_model]
+    prompt_format = _prompt_format(profile)
 
     # Check for accept
     if message.strip().lower() in ("accept", "accepted", "looks good", "done", "yes"):
         return _handle_accepted(session)
+
+    if run_live_test_requested:
+        return _evaluate_review(session, should_run_live_test=True)
 
     # 1. Prompt Architect — refine with edit instructions
     arch_msgs, arch_sys = prompt_architect.build_messages(
@@ -293,32 +308,54 @@ def _handle_iterating(session: Session, message: str) -> dict:
     # 2. Update draft
     from orchestrator.response_merger import _extract_prompt_block
     session.current_draft = _extract_prompt_block(refined_response)
+    session.fewshot_examples = ""
 
     # 3. Guardrails
     gr = guardrails.check_prompt(session.current_draft, session.target_model)
 
     # 4. Build response
-    merged = merge_refinement(refined_response, "", gr)
+    merged = merge_refinement(
+        refined_response,
+        "",
+        gr,
+        prompt_format=prompt_format,
+    )
 
     # 5. Transition back to review
     session.state = "review"
 
-    return _response(session, merged)
+    return _response(
+        session,
+        merged["message"],
+        render_blocks=merged["render_blocks"],
+    )
 
 
 def _handle_accepted(session: Session) -> dict:
     """STATE: accepted — finalise and (optionally) ingest into the prompt DB."""
+    already_accepted = session.state == "accepted"
     session.state = "accepted"
+    profile = format_profiles.FORMAT_PROFILES.get(session.target_model, {})
 
     overall = session.scores.get("overall", -1)
     quality = overall / 10.0 if overall >= 0 else 0.0
-    ingested = False
+    ingested = bool(session.ingested)
 
-    if quality >= INGEST_THRESHOLD and session.current_draft:
+    if not already_accepted and quality >= INGEST_THRESHOLD and session.current_draft:
         ingested = _ingest_accepted_prompt(session, quality)
+    session.ingested = ingested
 
-    merged = format_accepted(session.current_draft, ingested)
-    return _response(session, merged)
+    merged = format_accepted(
+        session.current_draft,
+        ingested,
+        prompt_format=_prompt_format(profile),
+        threshold=INGEST_THRESHOLD,
+    )
+    return _response(
+        session,
+        merged["message"],
+        render_blocks=merged["render_blocks"],
+    )
 
 
 def _ingest_accepted_prompt(session: Session, quality_score: float) -> bool:
@@ -329,32 +366,8 @@ def _ingest_accepted_prompt(session: Session, quality_score: float) -> bool:
     """
     try:
         from prompt_db.ingest import ingest_single_prompt
-        from prompt_db.schema import PromptRecord
-
-        profile = format_profiles.FORMAT_PROFILES.get(session.target_model, {})
-        fmt = "xml" if profile.get("wrapper_format") == "xml" else "markdown"
-
-        techniques = (
-            session.scores.get("techniques_identified")
-            if isinstance(session.scores, dict)
-            else None
-        ) or []
-
-        record = PromptRecord(
-            id=f"user_{session.session_id[:12]}",
-            task_category=session.task_category or "general",
-            subcategory=session.task_category or "general",
-            target_model=session.target_model,
-            format=fmt,
-            techniques=list(techniques),
-            system_prompt=session.current_draft,
-            user_prompt_template="",
-            few_shot_examples=[],
-            quality_score=max(0.0, min(1.0, quality_score)),
-            source="user_generated",
-        )
-        ingest_single_prompt(record)
-        return True
+        record = _build_prompt_record_from_session(session, quality_score)
+        return bool(ingest_single_prompt(record))
     except Exception as e:
         print(f"Prompt ingestion failed: {e}")
         return False
@@ -364,38 +377,177 @@ def _ingest_accepted_prompt(session: Session, quality_score: float) -> bool:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _run_live_test(prompt: str, target_model: str) -> str | None:
-    """Send the draft prompt to the target model with a brief test input.
+def _evaluate_review(session: Session, *, should_run_live_test: bool) -> dict:
+    """Run the critic and optional live test, then build the review payload."""
+    profile = format_profiles.FORMAT_PROFILES[session.target_model]
+    final_prompt = _assemble_prompt_for_review(session)
 
-    Returns the model's output, or ``None`` on failure.
+    with ThreadPoolExecutor(max_workers=2 if should_run_live_test else 1) as pool:
+        critic_future = pool.submit(
+            run_critic_review,
+            final_prompt,
+            session.task_category,
+            profile,
+            session.target_model,
+        )
+        live_test_future = (
+            pool.submit(run_live_test, final_prompt, session.target_model)
+            if should_run_live_test
+            else None
+        )
+
+        critic_result = critic_future.result()
+        live_test_result = live_test_future.result() if live_test_future else None
+
+    critic_response = critic_result["response"]
+    scores = critic_result["scores"]
+    suggestions = critic_result["suggestions"]
+    sample_input = live_test_result.get("sample_input") if live_test_result else None
+
+    session.scores = scores
+    session.state = "iterating"
+
+    merged = merge_review(
+        critic_response,
+        scores,
+        suggestions=suggestions,
+        sample_input=sample_input,
+        sample_output=live_test_result,
+    )
+
+    return _response(
+        session,
+        merged["message"],
+        scores=scores,
+        suggestions=suggestions,
+        sample_input=sample_input,
+        sample_output=live_test_result,
+        live_testing_enabled=_live_testing_enabled(),
+        render_blocks=merged["render_blocks"],
+    )
+
+
+def _assemble_prompt_for_review(session: Session) -> str:
+    """Build the prompt to evaluate, including any few-shot examples."""
+    prompt_text = session.current_draft.strip()
+    fewshot_examples = (session.fewshot_examples or "").strip()
+    if not fewshot_examples:
+        return prompt_text
+
+    examples_section = format_profiles.format_section(
+        fewshot_examples,
+        "examples",
+        session.target_model,
+    ).strip()
+    if examples_section in prompt_text:
+        return prompt_text
+    return f"{prompt_text}\n\n{examples_section}".strip()
+
+
+def _build_prompt_record_from_session(session: Session, quality_score: float):
+    """Construct a PromptRecord from accepted session state."""
+    from prompt_db.schema import PromptRecord
+
+    profile = format_profiles.FORMAT_PROFILES.get(session.target_model, {})
+    fmt = "xml" if profile.get("wrapper_format") == "xml" else "markdown"
+    system_prompt, user_prompt_template = _split_final_draft(session.current_draft)
+
+    techniques = (
+        session.scores.get("techniques_identified")
+        if isinstance(session.scores, dict)
+        else None
+    ) or []
+
+    return PromptRecord(
+        id=f"user_{session.session_id[:12]}",
+        task_category=session.task_category or "general",
+        subcategory=session.subcategory or session.task_category or "general",
+        target_model=session.target_model,
+        format=fmt,
+        techniques=[str(t).strip() for t in techniques if str(t).strip()],
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        few_shot_examples=_parse_fewshot_examples(session.fewshot_examples),
+        quality_score=max(0.0, min(1.0, quality_score)),
+        source="user_generated",
+    )
+
+
+def _split_final_draft(prompt_text: str) -> tuple[str, str]:
+    """Split a final draft into system and user-template portions.
+
+    The current Prompt Architect does not emit a dedicated system/user split
+    for every format, so this parser only separates explicit markers. When no
+    such boundary is present, the full draft is kept as ``system_prompt`` and
+    the user template is left empty.
     """
-    try:
-        test_input = (
-            "This is a brief test. Respond with a short example output "
-            "demonstrating how you would handle a typical request using the "
-            "instructions above."
-        )
+    text = (prompt_text or "").strip()
+    if not text:
+        return "", ""
 
-        from orchestrator.agent_router import invoke_agent
-        messages = [
-            {"role": "user", "content": [{"type": "text", "text": test_input}]},
-        ]
-        return invoke_agent(
-            agent_name="live_test",
-            messages=messages,
-            system=prompt,
-            max_tokens=500,
+    system_patterns = (
+        r"(?is)^\s*system\s*:\s*(.*?)\n\s*user\s*:\s*(.*)$",
+        r"(?is)^\s*##\s*system\b(.*?)\n\s*##\s*user(?:\s+prompt|\s+template)?\b(.*)$",
+        r"(?is)^\s*<system>(.*?)</system>\s*<user(?:_prompt|_template)?>(.*?)</user(?:_prompt|_template)?>\s*$",
+    )
+    for pattern in system_patterns:
+        match = re.match(pattern, text)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+
+    return text, ""
+
+
+def _parse_fewshot_examples(text: str) -> list[dict]:
+    """Parse the Few-Shot Generator's text output into structured examples."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+
+    blocks = re.split(r"(?im)^(?=Example\s+\d+)", raw)
+    examples: list[dict] = []
+
+    for block in blocks:
+        chunk = block.strip()
+        if not chunk:
+            continue
+
+        label_match = re.match(r"(?im)^Example\s+\d+\s+[—-]\s*(.+)$", chunk)
+        label = label_match.group(1).strip() if label_match else ""
+
+        input_match = re.search(
+            r"(?is)\bInput\s*:\s*(.*?)\n\s*Output\s*:\s*(.*)$",
+            chunk,
         )
-    except Exception as e:
-        print(f"Live test failed: {e}")
-        return None
+        if input_match:
+            example = {
+                "input": input_match.group(1).strip(),
+                "output": input_match.group(2).strip(),
+            }
+            if label:
+                example["label"] = label
+            examples.append(example)
+            continue
+
+        examples.append({"text": _clean_fewshot_block(chunk)})
+
+    return examples
+
+
+def _clean_fewshot_block(text: str) -> str:
+    cleaned = re.sub(r"(?im)^Example\s+\d+\s+[—-]\s*", "", text).strip()
+    return cleaned
 
 
 def _response(
     session: Session,
     message: str,
     scores: dict | None = None,
-    sample_output: str | None = None,
+    suggestions: list[str] | None = None,
+    sample_input: str | None = None,
+    sample_output: dict | None = None,
+    live_testing_enabled: bool | None = None,
+    render_blocks: list[dict] | None = None,
 ) -> dict:
     """Build the standard response payload."""
     return {
@@ -404,7 +556,12 @@ def _response(
         "message": message,
         "prompt_draft": session.current_draft,
         "scores": scores or session.scores,
+        "suggestions": suggestions or [],
+        "sample_input": sample_input,
         "sample_output": sample_output,
+        "ingested": session.ingested,
+        "live_testing_enabled": _live_testing_enabled() if live_testing_enabled is None else live_testing_enabled,
+        "render_blocks": render_blocks or [],
     }
 
 
@@ -414,3 +571,30 @@ def _error(code: int, msg: str) -> dict:
         "headers": CORS_HEADERS,
         "body": json.dumps({"error": msg}),
     }
+
+
+def _prompt_format(profile: dict) -> str:
+    return "xml" if profile.get("wrapper_format") == "xml" else "markdown"
+
+
+def _live_testing_enabled() -> bool:
+    return os.environ.get("POGO_ENABLE_LIVE_TEST", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _coerce_optional_bool(value) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None

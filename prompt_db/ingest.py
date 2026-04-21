@@ -23,8 +23,11 @@ from pathlib import Path
 import numpy as np
 
 from prompt_db.embeddings import embed_batch, embed_text
+from prompt_db.retrieve import reset_cache, retrieve_similar_prompts
 from prompt_db.schema import PromptRecord, to_embedding_text
 from prompt_db.store import load, save
+
+DEDUP_SIMILARITY_THRESHOLD = 0.95
 
 # ---------------------------------------------------------------------------
 # Seed-data normalisation
@@ -178,11 +181,23 @@ def ingest_single_prompt(record: PromptRecord) -> bool:
     """Append *record* to the prompt DB.
 
     Validates the record, computes its embedding, and persists.
-    Returns ``True`` on success.
+    Returns ``True`` on success, ``False`` when skipped as a near-duplicate.
     """
     record.validate()
 
-    vec = embed_text(to_embedding_text(record))
+    query_text = to_embedding_text(record)
+    reset_cache()
+    near_matches = retrieve_similar_prompts(query_text, k=3)
+    for existing, similarity in near_matches:
+        if similarity > DEDUP_SIMILARITY_THRESHOLD:
+            print(
+                "Skipped ingestion for "
+                f"{record.id}: near-duplicate of {existing.id} "
+                f"(similarity={similarity:.4f})."
+            )
+            return False
+
+    vec = embed_text(query_text)
     records, embeddings = load()
 
     records.append(record)
@@ -192,6 +207,7 @@ def ingest_single_prompt(record: PromptRecord) -> bool:
         embeddings = np.vstack([embeddings, vec.reshape(1, -1)]).astype("float32")
 
     save(records, embeddings)
+    reset_cache()
     print(f"Ingested prompt {record.id} ({record.task_category}/{record.target_model}).")
     return True
 

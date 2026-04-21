@@ -155,12 +155,40 @@ def parse_scores(response: str) -> dict:
             if m:
                 scores[key] = int(m.group(1))
 
+    if not scores.get("techniques_identified"):
+        scores["techniques_identified"] = _extract_techniques(response)
+
     # Fill missing keys with -1
     for key in SCORE_KEYS:
         scores.setdefault(key, -1)
     scores.setdefault("techniques_identified", [])
 
     return scores
+
+
+def parse_suggestions(response: str) -> list[str]:
+    """Extract 2-3 actionable improvement suggestions from Critic prose."""
+    text = _strip_json_block(response)
+    if not text:
+        return []
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    suggestions = _extract_list_after_heading(lines)
+    if suggestions:
+        return suggestions
+
+    suggestions = _extract_bullets(lines)
+    if suggestions:
+        return suggestions[-3:]
+
+    sentence_matches = re.findall(r"[^.!?]+[.!?]", text)
+    actionable = []
+    for sentence in sentence_matches:
+        cleaned = sentence.strip()
+        if re.search(r"\b(add|include|specify|clarify|define|tighten|state|reduce|limit)\b", cleaned, re.IGNORECASE):
+            actionable.append(cleaned.rstrip(".!?"))
+    return actionable[:3]
 
 
 def _format_references(prompts: list[str] | None) -> str:
@@ -170,3 +198,70 @@ def _format_references(prompts: list[str] | None) -> str:
     for i, p in enumerate(prompts, 1):
         sections.append(f"--- Reference {i} ---\n{p}")
     return "\n\n".join(sections)
+
+
+def _strip_json_block(text: str) -> str:
+    return re.sub(r"```(?:json)?\s*\{[\s\S]*?\}\s*```", "", text, count=1).strip()
+
+
+def _extract_list_after_heading(lines: list[str]) -> list[str]:
+    suggestions: list[str] = []
+    capture = False
+
+    for line in lines:
+        lowered = line.lower().rstrip(":")
+        if "suggestion" in lowered or "improvement" in lowered:
+            capture = True
+            remainder = re.sub(r"^.*?:\s*", "", line).strip()
+            if remainder and remainder != line:
+                suggestions.append(remainder)
+            continue
+
+        if not capture:
+            continue
+
+        bullet = re.match(r"^(?:[-*]|\d+\.)\s+(.*)$", line)
+        if bullet:
+            suggestions.append(bullet.group(1).strip())
+            continue
+
+        if suggestions:
+            suggestions[-1] = f"{suggestions[-1]} {line}".strip()
+
+    return suggestions[:3]
+
+
+def _extract_bullets(lines: list[str]) -> list[str]:
+    suggestions: list[str] = []
+    for line in lines:
+        bullet = re.match(r"^(?:[-*]|\d+\.)\s+(.*)$", line)
+        if bullet:
+            suggestions.append(bullet.group(1).strip())
+    return suggestions
+
+
+def _extract_techniques(response: str) -> list[str]:
+    json_inline = re.search(
+        r"techniques_identified[\"']?\s*[:=]\s*\[([^\]]*)\]",
+        response,
+        re.IGNORECASE,
+    )
+    if json_inline:
+        raw_items = [
+            part.strip().strip("\"'")
+            for part in json_inline.group(1).split(",")
+        ]
+        return [item for item in raw_items if item]
+
+    heading_match = re.search(
+        r"(?im)^techniques(?:\s+identified)?\s*:\s*(.+)$",
+        response,
+    )
+    if heading_match:
+        raw = heading_match.group(1).strip()
+        if raw.startswith("[") and raw.endswith("]"):
+            raw = raw[1:-1]
+        parts = [part.strip().strip("\"'") for part in raw.split(",")]
+        return [part for part in parts if part]
+
+    return []
