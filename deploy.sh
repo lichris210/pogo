@@ -10,8 +10,8 @@ API_NAME="pogo-api"
 REGION="us-east-1"
 RUNTIME="python3.12"
 HANDLER="handler.lambda_handler"
-TIMEOUT=60
-MEMORY=512
+TIMEOUT=90
+MEMORY=1024
 
 echo "=== POGO Deployment ==="
 
@@ -61,12 +61,22 @@ echo "Step 2: Packaging Lambda function..."
 rm -rf /tmp/pogo-package
 mkdir -p /tmp/pogo-package
 
-# Copy handler
-cp lambda/handler.py /tmp/pogo-package/
+# Copy handler to package root
+cp lambda/handler.py /tmp/pogo-package/handler.py
+
+# Copy application packages (excluding __pycache__)
+cp -r agents /tmp/pogo-package/
+cp -r orchestrator /tmp/pogo-package/
+cp -r prompt_db /tmp/pogo-package/
+find /tmp/pogo-package -type d -name __pycache__ -exec rm -rf {} +
+
+# Install runtime Python dependencies (numpy) into the package
+pip install -r requirements.txt -t /tmp/pogo-package/ --quiet
 
 # Create zip
 cd /tmp/pogo-package
-zip -r /tmp/pogo-lambda.zip handler.py
+rm -f /tmp/pogo-lambda.zip
+zip -rq /tmp/pogo-lambda.zip .
 cd -
 
 echo "  Package size: $(du -h /tmp/pogo-lambda.zip | cut -f1)"
