@@ -140,6 +140,23 @@ Generate an optimized prompt for this task."""
 
 
 def lambda_handler(event, context):
+    # CORS preflight — respond before any routing / heavy imports
+    method = (
+        event.get("requestContext", {}).get("http", {}).get("method")
+        or event.get("httpMethod")
+        or ""
+    ).upper()
+    if method == "OPTIONS":
+        return {
+            "statusCode": 204,
+            "headers": {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+            "body": "",
+        }
+
     # Route /optimize requests to the v2 orchestrator
     raw_path = event.get("rawPath", event.get("path", ""))
     if raw_path.endswith("/optimize"):
