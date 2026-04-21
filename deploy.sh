@@ -182,10 +182,17 @@ aws apigatewayv2 create-route \
   --region $REGION \
   2>/dev/null || true
 
-# CORS preflight route for /optimize
+# CORS preflight routes — forwarded to Lambda, which returns CORS headers
 aws apigatewayv2 create-route \
   --api-id $API_ID \
   --route-key "OPTIONS /optimize" \
+  --target "integrations/$INTEGRATION_ID" \
+  --region $REGION \
+  2>/dev/null || true
+
+aws apigatewayv2 create-route \
+  --api-id $API_ID \
+  --route-key "OPTIONS /generate" \
   --target "integrations/$INTEGRATION_ID" \
   --region $REGION \
   2>/dev/null || true
@@ -213,13 +220,48 @@ echo "  DynamoDB table ready"
 API_URL="https://$API_ID.execute-api.$REGION.amazonaws.com/generate"
 OPTIMIZE_URL="https://$API_ID.execute-api.$REGION.amazonaws.com/optimize"
 
+# --- Step 7: Deploy frontend to S3 static website ---
+echo ""
+echo "Step 7: Deploying frontend to S3..."
+
+WEB_BUCKET="pogo-web-ui"
+WEB_SRC="pogo.html"
+WEB_TMP="/tmp/pogo.html"
+
+# Create bucket if it doesn't exist
+aws s3api head-bucket --bucket $WEB_BUCKET --region $REGION 2>/dev/null || \
+  aws s3 mb s3://$WEB_BUCKET --region $REGION
+
+# Ensure static website hosting is enabled (index: pogo.html)
+WEBSITE_ENABLED=$(aws s3api get-bucket-website --bucket $WEB_BUCKET --region $REGION \
+  --query 'IndexDocument.Suffix' --output text 2>/dev/null || echo "")
+
+if [ "$WEBSITE_ENABLED" != "pogo.html" ]; then
+  echo "  Enabling static website hosting..."
+  aws s3 website s3://$WEB_BUCKET --index-document pogo.html --region $REGION
+else
+  echo "  Static website hosting already enabled"
+fi
+
+# Substitute API_ID into a temp copy, then upload
+cp $WEB_SRC $WEB_TMP
+sed -i "s/YOUR_API_ID/$API_ID/g" $WEB_TMP
+
+aws s3 cp $WEB_TMP s3://$WEB_BUCKET/pogo.html \
+  --content-type "text/html" \
+  --region $REGION
+
+WEBSITE_URL="http://$WEB_BUCKET.s3-website-$REGION.amazonaws.com"
+echo "  Frontend deployed: $WEBSITE_URL"
+
 echo ""
 echo "============================================"
 echo "  POGO DEPLOYED SUCCESSFULLY!"
 echo "============================================"
 echo ""
-echo "  v1 API URL: $API_URL"
-echo "  v2 API URL: $OPTIMIZE_URL"
+echo "  v1 API URL:   $API_URL"
+echo "  v2 API URL:   $OPTIMIZE_URL"
+echo "  Website URL:  $WEBSITE_URL"
 echo ""
 echo "  Test v1:"
 echo "  curl -X POST $API_URL \\"
