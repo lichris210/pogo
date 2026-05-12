@@ -245,7 +245,7 @@ fi
 
 # Substitute API_ID into a temp copy, then upload
 cp $WEB_SRC $WEB_TMP
-sed -i "s/YOUR_API_ID/$API_ID/g" $WEB_TMP
+sed -i.bak "s/YOUR_API_ID/$API_ID/g" $WEB_TMP && rm "$WEB_TMP.bak"
 
 aws s3 cp $WEB_TMP s3://$WEB_BUCKET/pogo.html \
   --content-type "text/html" \

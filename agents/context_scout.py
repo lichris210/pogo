@@ -71,6 +71,14 @@ Return a numbered list (1-5 items, ranked by impact). Each item:
 Keep suggestions concrete and actionable — avoid generic advice like \
 "provide more context."
 
+=== STRICT OUTPUT RULES ===
+- Begin your response directly with "1." — no preamble, no greeting, no \
+restatement of the task.
+- Do NOT include any reasoning, chain-of-thought, "Let me think...", \
+"To make this stronger...", or any explanatory text before the list.
+- Do NOT add a closing summary or commentary after the list.
+- Output ONLY the numbered list of context items.
+
 {format_instructions}
 """
 

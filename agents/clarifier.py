@@ -41,6 +41,14 @@ parenthetical noting why it matters, e.g.:
      (This determines whether the prompt needs selection criteria or just \
 generation instructions.)
 
+=== STRICT OUTPUT RULES ===
+- Begin your response directly with "1." — no preamble, no greeting, no \
+restatement of the task.
+- Do NOT include any reasoning, chain-of-thought, "Let me think...", \
+"Here are some questions...", or any explanatory text before the list.
+- Do NOT add a closing summary or commentary after the list.
+- Output ONLY the numbered list of questions.
+
 {format_instructions}
 """
 
