@@ -22,7 +22,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] Design doc committed (`WORKFLOW_REDESIGN.md`)
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
-- [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `9811228`
+- [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`
 - [ ] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture)
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
@@ -48,7 +48,7 @@ Fixed three bugs:
 - If Phase C migrates Context Scout to structured JSON output, drop the `_strip_preamble` call for that agent in the merger.
 - Latent bug in `_extract_list_items()`: treats leading non-numbered lines as bullet items, which was rendering preamble as fake checklist items. The `_strip_preamble` fix neutralizes the symptom but the underlying bug remains. Worth folding into Phase E when the renderer is touched.
 
-**2026-05-12 — Phase B1 complete (commit `9811228`)**
+**2026-05-12 — Phase B1 complete (commit `5a573ce`)**
 
 Backfilled unit test coverage for code introduced in original PLAN.md Phases 6 (Critic + Live Testing) and 7 (Prompt Ingestion Loop). All Bedrock and vector-store calls remain mocked so the suite runs offline.
 
