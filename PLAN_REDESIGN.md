@@ -21,7 +21,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 
 - [x] Design doc committed (`WORKFLOW_REDESIGN.md`)
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
-- [ ] **Phase A.** Bug fixes (#1, #8, #9)
+- [x] **Phase A.** Bug fixes (#1, #8, #9)
 - [ ] **Phase B.** Test backfill (Phases 6–7) + build eval harness
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
@@ -33,7 +33,16 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 
 Add a dated entry here after every completed phase. Note anything subsequent phases need to know about (renamed files, changed contracts, deferred items).
 
-*No entries yet.*
+### 2026-05-12 — Phase A complete
+
+Fixed bugs #1, #8, #9. `deploy.sh` now uses the cross-platform `sed -i.bak ... && rm` pattern so it runs on macOS BSD sed without manual patching. The Clarifier and Context Scout CoT preamble leaks are fixed with a defense-in-depth approach:
+
+- **Prompt-level:** Both agent system prompts gained a `STRICT OUTPUT RULES` section explicitly forbidding preamble, chain-of-thought, greetings, or commentary, and requiring the response to begin directly with `1.`.
+- **Code-level safety net:** A new `_strip_preamble()` helper in `orchestrator/response_merger.py` discards anything before the first `\n1. ` (or initial `1. `) marker. It is applied to both `scout_response` and `clarifier_response` at the top of `merge_draft_scout_clarifier()` before the text is inserted into the user-facing message or fed to `_extract_list_items()`. The helper is a no-op when no numbered list is present, so non-list outputs still surface.
+
+Both agents continue to emit the existing conversational numbered-list schema — no contract change. Phase C (Research agent / Context Scout rename + expanded scope) inherits the same output rules; if Phase C migrates Context Scout to structured JSON it should drop the `_strip_preamble` call for that agent. Phase D / Decomposer should adopt the same `STRICT OUTPUT RULES` boilerplate from day one.
+
+Tests: added 7 new tests in `tests/test_orchestrator.py` under `TestCoTPreambleStripping` covering the helper, end-to-end merger stripping for both agents, the clean-input passthrough, and presence of the strict-rules block in each agent's `SYSTEM_PROMPT`. Full suite: 145 tests passing.
 
 ---
 

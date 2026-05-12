@@ -293,6 +293,124 @@ class TestResponseMerger(unittest.TestCase):
         self.assertEqual(result["render_blocks"][1]["format"], "markdown")
 
 
+class TestCoTPreambleStripping(unittest.TestCase):
+    """Regression coverage for bugs #8 and #9.
+
+    The Clarifier and Context Scout occasionally emit chain-of-thought or a
+    conversational lead-in before their numbered list. The merger must strip
+    that preamble before it reaches the user-facing message or render blocks.
+    """
+
+    # --- Direct helper coverage ------------------------------------------------
+
+    def test_strip_preamble_removes_cot_lead_in(self):
+        from orchestrator.response_merger import _strip_preamble
+        text = (
+            "Let me think about what needs clarification here...\n"
+            "Here are some questions:\n"
+            "1. What format should the output take?\n"
+            "2. How long should the response be?"
+        )
+        out = _strip_preamble(text)
+        self.assertTrue(out.startswith("1."))
+        self.assertNotIn("Let me think", out)
+        self.assertNotIn("Here are some questions", out)
+        self.assertIn("What format", out)
+
+    def test_strip_preamble_no_list_returns_unchanged(self):
+        from orchestrator.response_merger import _strip_preamble
+        text = "No list here, just prose."
+        self.assertEqual(_strip_preamble(text), text)
+
+    def test_strip_preamble_already_clean(self):
+        from orchestrator.response_merger import _strip_preamble
+        text = "1. First item\n2. Second item"
+        self.assertEqual(_strip_preamble(text), text)
+
+    # --- End-to-end through merge_draft_scout_clarifier ------------------------
+
+    def _draft(self) -> str:
+        return "```\nYou are a data analyst...\n```\n\n**Techniques Used:**\nCoT"
+
+    def test_clarifier_preamble_stripped_from_message(self):
+        from orchestrator.response_merger import merge_draft_scout_clarifier
+        clarifier_with_cot = (
+            "Let me think about what needs clarification here. Looking at the "
+            "draft, I see several ambiguities.\n\n"
+            "1. What output format do you want?\n"
+            "2. How many rows of data should be processed?\n"
+            "3. Should errors be raised or logged?"
+        )
+        result = merge_draft_scout_clarifier(
+            draft_response=self._draft(),
+            scout_response="1. Schema\n2. Sample data",
+            clarifier_response=clarifier_with_cot,
+            prompt_format="xml",
+        )
+        self.assertNotIn("Let me think", result["message"])
+        self.assertNotIn("ambiguities", result["message"])
+        self.assertIn("What output format", result["message"])
+        clarifier_block = result["render_blocks"][3]
+        self.assertEqual(clarifier_block["type"], "clarifier_questions")
+        for item in clarifier_block["items"]:
+            self.assertNotIn("Let me think", item)
+            self.assertNotIn("ambiguities", item)
+        self.assertEqual(len(clarifier_block["items"]), 3)
+
+    def test_context_scout_preamble_stripped_from_message(self):
+        from orchestrator.response_merger import merge_draft_scout_clarifier
+        scout_with_cot = (
+            "To make this stronger, let me consider what context would help.\n"
+            "Here's my analysis of what would improve the prompt:\n\n"
+            "1. Database schema\n"
+            "   Why: Grounds the analysis in real columns.\n"
+            "2. Sample rows\n"
+            "   Why: Anchors the model on representative data."
+        )
+        result = merge_draft_scout_clarifier(
+            draft_response=self._draft(),
+            scout_response=scout_with_cot,
+            clarifier_response="1. What format?\n2. How many rows?",
+            prompt_format="xml",
+        )
+        self.assertNotIn("To make this stronger, let me consider", result["message"])
+        self.assertNotIn("Here's my analysis", result["message"])
+        self.assertIn("Database schema", result["message"])
+        scout_block = result["render_blocks"][2]
+        self.assertEqual(scout_block["type"], "context_checklist")
+        for item in scout_block["items"]:
+            self.assertNotIn("let me consider", item.lower())
+            self.assertNotIn("here's my analysis", item.lower())
+        self.assertEqual(len(scout_block["items"]), 2)
+
+    def test_both_agents_clean_when_no_preamble(self):
+        """Preamble-free outputs must pass through unchanged."""
+        from orchestrator.response_merger import merge_draft_scout_clarifier
+        result = merge_draft_scout_clarifier(
+            draft_response=self._draft(),
+            scout_response="1. Schema\n2. Sample data\n3. Metrics definitions",
+            clarifier_response="1. What format?\n2. How many rows?\n3. Edge cases?",
+            prompt_format="xml",
+        )
+        self.assertEqual(len(result["render_blocks"][2]["items"]), 3)
+        self.assertEqual(len(result["render_blocks"][3]["items"]), 3)
+        self.assertIn("Schema", result["render_blocks"][2]["items"][0])
+        self.assertIn("What format", result["render_blocks"][3]["items"][0])
+
+    def test_clarifier_system_prompt_forbids_preamble(self):
+        """Agent system prompt must explicitly forbid CoT preamble."""
+        from agents.clarifier import SYSTEM_PROMPT
+        lower = SYSTEM_PROMPT.lower()
+        self.assertIn("no preamble", lower)
+        self.assertIn("strict output rules", lower)
+
+    def test_context_scout_system_prompt_forbids_preamble(self):
+        from agents.context_scout import SYSTEM_PROMPT
+        lower = SYSTEM_PROMPT.lower()
+        self.assertIn("no preamble", lower)
+        self.assertIn("strict output rules", lower)
+
+
 class TestAcceptedPromptHelpers(unittest.TestCase):
 
     def test_build_prompt_record_from_session(self):

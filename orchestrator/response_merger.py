@@ -17,6 +17,9 @@ def merge_draft_scout_clarifier(
     prompt_text = _extract_prompt_block(draft_response)
     techniques = _extract_after(draft_response, "Techniques Used")
 
+    scout_response = _strip_preamble(scout_response)
+    clarifier_response = _strip_preamble(clarifier_response)
+
     parts = [
         "Here's an initial prompt draft based on your task:\n",
         "```\n" + prompt_text + "\n```\n",
@@ -352,6 +355,26 @@ def _extract_after(text: str, heading: str) -> str:
     if m:
         return m.group(1).strip()
     return ""
+
+
+def _strip_preamble(text: str) -> str:
+    """Strip any chain-of-thought or preamble before the first numbered item.
+
+    Some agents (Clarifier, Context Scout) occasionally emit reasoning or a
+    conversational lead-in before their numbered list. The output contract is
+    "numbered list only", so anything before the first ``\\n1.`` (or initial
+    ``1.``) is discarded. If no numbered list is present, the text is returned
+    unchanged so non-list outputs still surface.
+    """
+    if not text:
+        return text
+    m = re.search(r"(?:^|\n)\s*1\.\s+", text)
+    if not m:
+        return text
+    start = m.start()
+    if text[start] == "\n":
+        start += 1
+    return text[start:].lstrip()
 
 
 def _extract_list_items(text: str) -> list[str]:
