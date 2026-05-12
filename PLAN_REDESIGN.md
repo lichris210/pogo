@@ -21,8 +21,9 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 
 - [x] Design doc committed (`WORKFLOW_REDESIGN.md`)
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
-- [x] **Phase A.** Bug fixes (#1, #8, #9)
-- [ ] **Phase B.** Test backfill (Phases 6–7) + build eval harness
+- [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
+- [ ] **Phase B1.** Test backfill for original Phases 6–7
+- [ ] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture)
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -31,124 +32,108 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 
 ## Changelog
 
-Add a dated entry here after every completed phase. Note anything subsequent phases need to know about (renamed files, changed contracts, deferred items).
+*(Preserve Claude Code's exact wording from its in-flight updates; the entry below is a summary reconstruction.)*
 
-### 2026-05-12 — Phase A complete
+**2026-05-12 — Phase A complete (commit `7314966`)**
 
-Fixed bugs #1, #8, #9. `deploy.sh` now uses the cross-platform `sed -i.bak ... && rm` pattern so it runs on macOS BSD sed without manual patching. The Clarifier and Context Scout CoT preamble leaks are fixed with a defense-in-depth approach:
+Fixed three bugs:
+- Bug #1: `deploy.sh` line 248 changed from bare `sed -i` to cross-platform `sed -i.bak ... && rm` pattern.
+- Bug #8 (Clarifier CoT leak) and Bug #9 (Context Scout CoT leak) fixed via defense in depth:
+  - Added `=== STRICT OUTPUT RULES ===` section to `agents/clarifier.py` and `agents/context_scout.py` system prompts forbidding preamble.
+  - Added `_strip_preamble()` helper in `orchestrator/response_merger.py`, applied to both responses in `merge_draft_scout_clarifier()`.
+- Rejected JSON migration on the grounds that it would force coordinated schema changes downstream and Phase C is already renaming Context Scout.
+- Test count: 138 → 145 (added 7 tests in `TestCoTPreambleStripping`).
 
-- **Prompt-level:** Both agent system prompts gained a `STRICT OUTPUT RULES` section explicitly forbidding preamble, chain-of-thought, greetings, or commentary, and requiring the response to begin directly with `1.`.
-- **Code-level safety net:** A new `_strip_preamble()` helper in `orchestrator/response_merger.py` discards anything before the first `\n1. ` (or initial `1. `) marker. It is applied to both `scout_response` and `clarifier_response` at the top of `merge_draft_scout_clarifier()` before the text is inserted into the user-facing message or fed to `_extract_list_items()`. The helper is a no-op when no numbered list is present, so non-list outputs still surface.
-
-Both agents continue to emit the existing conversational numbered-list schema — no contract change. Phase C (Research agent / Context Scout rename + expanded scope) inherits the same output rules; if Phase C migrates Context Scout to structured JSON it should drop the `_strip_preamble` call for that agent. Phase D / Decomposer should adopt the same `STRICT OUTPUT RULES` boilerplate from day one.
-
-Tests: added 7 new tests in `tests/test_orchestrator.py` under `TestCoTPreambleStripping` covering the helper, end-to-end merger stripping for both agents, the clean-input passthrough, and presence of the strict-rules block in each agent's `SYSTEM_PROMPT`. Full suite: 145 tests passing.
+**Notes for subsequent phases:**
+- If Phase C migrates Context Scout to structured JSON output, drop the `_strip_preamble` call for that agent in the merger.
+- Latent bug in `_extract_list_items()`: treats leading non-numbered lines as bullet items, which was rendering preamble as fake checklist items. The `_strip_preamble` fix neutralizes the symptom but the underlying bug remains. Worth folding into Phase E when the renderer is touched.
 
 ---
 
-## Phase A — Bug Fixes
+## Phase B1 — Test Backfill for Original Phases 6–7
 
 ### Goal
 
-Fix three bugs that block clean downstream redesign work:
-1. `deploy.sh` macOS sed-i incompatibility (bug #1)
-2. Clarifier agent leaks CoT preamble into "Things to sharpen" output (bug #8)
-3. Context Scout agent leaks CoT preamble into "To make this stronger" output (bug #9)
+The original PLAN.md's Phases 6 and 7 (built via Codex) shipped without unit test instructions, leaving a coverage gap in production code. Identify the gap, fill it with focused unit tests, and bring those modules up to the same coverage standard as Phases 1–5.
 
-### Why these first
+### Why this before the eval harness
 
-Phases C and D add new agents (Research agent, Decomposer) on top of the existing Clarifier and Context Scout. Adding new agents on top of two that already leak chain-of-thought compounds the problem. Fix the leaks before adding more agents. Bug #1 blocks clean deploys for everyone on macOS.
+The eval harness in Phase B2 will run the current pipeline end-to-end and capture outputs as a v2 baseline. If Phases 6–7 code has bugs that test backfill would have caught, the v2 baseline locks in those bugs as "expected behavior" and every subsequent redesign phase will look like a regression when it shouldn't. Fix what you have before measuring it.
 
 ### Claude Code prompt (paste below)
 
 ```
-You are working on POGO v2.1, a multi-agent prompt optimization system.
+You are working on POGO v2.1. We are executing Phase B1 of the redesign.
 
 Before doing anything, read these files in this order to load context:
-1. WORKFLOW_REDESIGN.md — the target state for v2.1, the final product we're working toward.
-2. PLAN_REDESIGN.md — the implementation plan. We are executing Phase A.
-3. ARCHITECTURE.md — current production architecture.
+1. WORKFLOW_REDESIGN.md — the target state for v2.1.
+2. PLAN_REDESIGN.md — this implementation plan. Note the Changelog; Phase A is complete.
+3. PLAN.md — the historical plan for the original build. Phases 6 and 7 are your scope here.
+4. ARCHITECTURE.md — current production architecture.
 
-Then locate and read the source files for the Clarifier agent, the Context Scout agent, and deploy.sh. Do not modify anything yet.
-
-Your task for Phase A is to fix three bugs. Address them in this order.
-
-==========
-BUG #1 — deploy.sh macOS sed incompatibility
-==========
-
-Current behavior: deploy.sh uses `sed -i 's/.../.../' file` which is GNU sed syntax. macOS ships BSD sed, which requires `sed -i '' 's/.../.../'`. The result is that deploys fail on macOS unless the developer manually patches the sed command. This patch was applied once during the initial deploy but never baked into the script.
-
-Fix: Use the cross-platform pattern `sed -i.bak 's/.../.../' file && rm file.bak`, which works on both GNU and BSD sed. Apply this to every `sed -i` invocation in deploy.sh.
-
-Verify the fix by reading deploy.sh after the change and confirming no bare `sed -i` invocations remain. If you can run it locally (or simulate the relevant section in isolation), do so.
+Your task is to backfill unit test coverage for code introduced in Phases 6 and 7 of the original PLAN.md. Approach it in three stages.
 
 ==========
-BUG #8 — Clarifier CoT preamble leak
+Stage 1 — Identify the coverage gap
 ==========
 
-Current behavior: The Clarifier's "Things to sharpen" output includes a chain-of-thought preamble (e.g., "Let me think about what needs clarification here...") before the actual list of items. This preamble leaks to the user.
-
-Investigate first:
-1. Read the Clarifier agent's source file.
-2. Inspect its system prompt.
-3. Inspect how its output is parsed and returned to the user.
-4. Determine the leak's origin: is the system prompt allowing preamble, or is the output not being parsed/stripped?
-
-Pick the cleanest fix given the code you find:
-- Tighten the system prompt to forbid preamble explicitly ("Output only the clarification items as a JSON array. No reasoning, no preamble, no explanation.").
-- Switch to structured output (JSON) so preamble can't sneak in.
-- Post-process the output to strip any text before the first item marker.
-
-State which approach you chose and why in your final response.
-
-Verify by running the Clarifier with at least 3 test prompts and confirming clean output. If existing tests don't cover this, add or extend tests in the relevant test file.
+1. Read PLAN.md and list every feature, module, or code path introduced in Phases 6 and 7. Be concrete: file paths and function names where possible.
+2. For each item from step 1, find the corresponding source code in the repo.
+3. For each source module, check the existing tests/ directory for coverage. Identify which features have no tests, which have shallow coverage (only happy path), and which are well-covered.
+4. Produce a short inventory in your response before you write any tests. Format: "Module → existing tests → gap." This is your work plan for Stage 2.
 
 ==========
-BUG #9 — Context Scout CoT preamble leak
+Stage 2 — Write the tests
 ==========
 
-Same shape as bug #8, applied to the Context Scout's "To make this stronger" output. Apply the same fix pattern you chose for bug #8 unless something in the Context Scout's code makes a different approach better. State your reasoning.
+Follow the existing test conventions (pytest, class-based organization, the patterns established in Phase A's TestCoTPreambleStripping). Prefer unit tests where the code is unit-testable. Use integration tests only where unit tests would be contrived.
 
-Note: Context Scout will be renamed to "Research agent" with expanded scope in Phase C. The CoT fix here still applies after the rename. Don't rename the file in Phase A; just fix the bug.
+For each gap from Stage 1:
+- Cover the happy path
+- Cover at least one error or edge case
+- Cover any non-obvious behavior (defaults, fallbacks, retry logic, etc.)
 
-Verify with at least 3 test prompts and add/extend tests.
+Do not pad the test count. Five tests that cover real behavior beat fifteen that cover variations of the same thing.
+
+Add tests to the existing test files where the file already covers the module. Create new test files only when no existing file fits.
 
 ==========
-Test verification
+Stage 3 — Validate
 ==========
 
-All existing tests must still pass. New or extended tests for bugs #8 and #9 must pass. If you can test deploy.sh in isolation, do so.
+1. Run the full test suite. All 145 existing tests must still pass. Your new tests must also pass.
+2. If any new test reveals a real bug in Phase 6–7 code (not a test setup issue), STOP. Do not fix the bug in this phase. Report it clearly so it can be triaged into the changelog as a known issue, and either fixed in Phase E or as a fast-follow Phase B1.5.
+3. Note the new test count.
 
 ==========
-When Phase A is complete
+When Phase B1 is complete
 ==========
 
 1. Update PLAN_REDESIGN.md:
-   - Check off Phase A in the Status checklist.
-   - Add a Changelog entry with today's date, a one-line summary of what was fixed, the approach taken for bugs #8 and #9, and any notes subsequent phases need (e.g., if you changed Context Scout's output schema, Phase C needs to know).
-2. Commit all changes with the message: "Phase A complete: fix bugs #1, #8, #9"
+   - Check off Phase B1 in the Status checklist.
+   - Add a Changelog entry with today's date, commit SHA, the Stage 1 inventory, the count of tests added per module, the new total test count, and any bugs surfaced during Stage 3.
+2. Commit with the message: "Phase B1 complete: test backfill for original Phases 6–7"
 3. Push.
-4. Stop. Do not proceed to Phase B without explicit instruction.
+4. Stop. Do not proceed to Phase B2 without explicit instruction.
 
-In your final response to me, summarize:
-- Which fix approach you chose for bugs #8 and #9 and why
-- Any files that changed beyond the obvious targets
-- Any surprises or new bugs surfaced during the work
-- Confirmation that all tests pass
+In your final response to me, include:
+- The Stage 1 inventory (module → gap)
+- Tests added per module with brief description of what each covers
+- Total test count before and after
+- Any bugs surfaced (with enough detail to triage)
+- Confirmation all tests pass
 ```
 
-### Acceptance criteria for Phase A
+### Acceptance criteria for Phase B1
 
-- `deploy.sh` runs on macOS without manual sed patching
-- Clarifier output contains no CoT preamble across 3+ test runs
-- Context Scout output contains no CoT preamble across 3+ test runs
-- All existing tests pass
-- New tests for bug #8 and #9 added and passing
-- `PLAN_REDESIGN.md` updated with checked-off status and Changelog entry
+- Every meaningful behavior from original Phases 6–7 has at least one corresponding unit or integration test
+- All existing tests still pass
+- New tests pass
+- Any bugs surfaced are documented in the Changelog, not silently fixed
+- `PLAN_REDESIGN.md` updated with checked-off status and detailed Changelog entry
 
 ---
 
-## Phase B onward
+## Phase B2 onward
 
-To be drafted after Phase A lands. Each subsequent phase will follow the same structure: goal, why-this-now, Claude Code prompt, acceptance criteria.
+To be drafted after Phase B1 lands. Phase B2 builds the eval harness (Option A: manual ratings only, designed to allow LLM-as-judge and downstream verification to be added later).
