@@ -22,7 +22,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] Design doc committed (`WORKFLOW_REDESIGN.md`)
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
-- [ ] **Phase B1.** Test backfill for original Phases 6–7
+- [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `9811228`
 - [ ] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture)
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
@@ -47,6 +47,25 @@ Fixed three bugs:
 **Notes for subsequent phases:**
 - If Phase C migrates Context Scout to structured JSON output, drop the `_strip_preamble` call for that agent in the merger.
 - Latent bug in `_extract_list_items()`: treats leading non-numbered lines as bullet items, which was rendering preamble as fake checklist items. The `_strip_preamble` fix neutralizes the symptom but the underlying bug remains. Worth folding into Phase E when the renderer is touched.
+
+**2026-05-12 — Phase B1 complete (commit `9811228`)**
+
+Backfilled unit test coverage for code introduced in original PLAN.md Phases 6 (Critic + Live Testing) and 7 (Prompt Ingestion Loop). All Bedrock and vector-store calls remain mocked so the suite runs offline.
+
+Stage 1 inventory (module → gap → tests added):
+
+- `orchestrator/live_test.py` → `_clean_generated_input`, `_fallback_test_input`, and the empty-generator-fallback branch of `run_live_test` were untested. **+7 tests** in `tests/test_live_test.py` (`TestCleanGeneratedInput`, `TestFallbackTestInput`, `TestRunLiveTestFallback`).
+- `agents/critic.parse_scores` → only the JSON happy path was exercised indirectly through orchestrator state tests; the regex fallback and missing-key defaults were untested. **+3 tests** in `tests/test_orchestrator.py::TestCriticParseScores`.
+- `orchestrator/agent_router.py` → `resolve_target_model_id`, `fetch_reference_prompts` (formatting + retrieval-error fallback), and `run_critic_review` (the end-to-end critic-with-references wiring introduced in Phase 6) had no direct tests. **+6 tests** in `tests/test_orchestrator.py::TestAgentRouterHelpers`.
+- `orchestrator/orchestrator._split_final_draft` → only one marker style was covered via `_build_prompt_record_from_session`; XML markers, the no-marker fallback, and empty input were untested. **+4 tests** in `tests/test_orchestrator.py::TestSplitFinalDraft`.
+- `orchestrator/orchestrator._parse_fewshot_examples` → multi-example parsing, empty input, and the "block without Input/Output" branch were untested. **+3 tests** in `tests/test_orchestrator.py::TestParseFewshotExamples`.
+- `orchestrator/orchestrator._ingest_accepted_prompt` → the swallow-on-failure contract relied on by `_handle_accepted` was untested. **+2 tests** in `tests/test_orchestrator.py::TestIngestAcceptedPrompt`.
+- `prompt_db/ingest.py` seed-normalisation helpers (`_normalise_target_model`, `_split_system_user`, `_seed_to_record`) → exercised indirectly via the seed-ingest integration test but with no unit-level assertions on mapping correctness. **+6 tests** in `tests/test_prompt_db.py::TestSeedNormalisation`.
+- `prompt_db/admin.py` → `update_score` bounds-check and the "ID not found" branches of `remove_prompt`/`update_score` were untested. **+3 tests** in `tests/test_prompt_db.py::TestAdminValidation`.
+
+Test count: 145 → **179** (added 34 tests). All tests pass.
+
+Bugs surfaced during Stage 3: **none**. The new tests confirmed existing Phase 6–7 behaviour rather than uncovering regressions.
 
 ---
 
