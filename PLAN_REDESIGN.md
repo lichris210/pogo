@@ -22,8 +22,9 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] Design doc committed (`WORKFLOW_REDESIGN.md`)
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
-- [ ] **Phase B1.** Test backfill for original Phases 6–7
-- [ ] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture)
+- [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`
+- [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. **Baseline capture deferred to post-B3** (AWS credentials gap in Claude Code sandbox).
+- [ ] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -32,7 +33,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 
 ## Changelog
 
-*(Preserve Claude Code's exact wording from its in-flight updates; the entry below is a summary reconstruction.)*
+*(Preserve Claude Code's exact wording from its in-flight updates; the entries below are summary reconstructions from Phase completion reports.)*
 
 **2026-05-12 — Phase A complete (commit `7314966`)**
 
@@ -47,6 +48,33 @@ Fixed three bugs:
 **Notes for subsequent phases:**
 - If Phase C migrates Context Scout to structured JSON output, drop the `_strip_preamble` call for that agent in the merger.
 - Latent bug in `_extract_list_items()`: treats leading non-numbered lines as bullet items, which was rendering preamble as fake checklist items. The `_strip_preamble` fix neutralizes the symptom but the underlying bug remains. Worth folding into Phase E when the renderer is touched.
+
+**2026-05-12 — Phase B1 complete (commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`)**
+
+Test backfill for original PLAN.md Phases 6–7. Test count: 145 → 179 (+34 tests). Zero bugs surfaced.
+
+Modules covered:
+- `orchestrator/live_test.py` (+7 tests: TestCleanGeneratedInput, TestFallbackTestInput, TestRunLiveTestFallback)
+- `agents/critic.parse_scores` (+3 tests: TestCriticParseScores covering JSON path, regex fallback, malformed JSON)
+- `orchestrator/agent_router.py` (+6 tests: TestAgentRouterHelpers covering resolve_target_model_id variants, fetch_reference_prompts fallback, run_critic_review wiring)
+- `orchestrator/orchestrator._split_final_draft` (+4 tests)
+- `orchestrator/orchestrator._parse_fewshot_examples` (+3 tests)
+- `orchestrator/orchestrator._ingest_accepted_prompt` (+2 tests)
+- `prompt_db/ingest.py` seed helpers (+6 tests: TestSeedNormalisation)
+- `prompt_db/admin.py` (+3 tests: TestAdminValidation)
+
+**2026-05-13 — Phase B2 complete (commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`)**
+
+Eval harness built. **Baseline capture deferred** — Claude Code sandbox had no AWS credentials, so all 18 entries skipped with `NoCredentialsError`. Placeholder file at `eval/runs/2026-05-13_4201783_v2-baseline.json`. Real baseline will be captured after Phase B3 migrates off Bedrock.
+
+Artifacts:
+- `eval/inputs.json` (18 entries spanning all 11 task categories, ~60/40 one-shot/chained, Claude ×7 / GPT ×6 / Gemini ×5)
+- `eval/run_eval.py` (programmatic orchestrator driver)
+- `eval/rate.py` (CLI rating tool)
+- `eval/README.md` (workflow docs)
+- Tests: B2 branch baseline was 145 → 155 (+10) because B2 branched before B1 landed. After branch consolidation in Phase B3 Stage 0, both sets will be present.
+
+**Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 will consolidate all three into a single long-lived `redesign/v2.1` branch and reconcile this file.
 
 ---
 
@@ -298,3 +326,140 @@ In your final response to me, include:
 - Baseline run captured at `eval/runs/<date>_<sha>_v2-baseline.json` with ratings null
 - All existing tests pass; new harness tests pass
 - `PLAN_REDESIGN.md` updated with checked-off status and detailed Changelog entry
+
+### Status note (post-completion)
+
+The harness build is complete but the baseline capture failed due to a credentials gap in the Claude Code sandbox. The placeholder file at `eval/runs/2026-05-13_4201783_v2-baseline.json` will be overwritten by a real baseline run after Phase B3 lands and the system can be invoked without AWS credentials. The harness itself is fully functional and tested.
+
+---
+
+## Phase B3 — Migrate Bedrock → Anthropic API + bump models
+
+### Goal
+
+Replace AWS Bedrock SDK calls with the Anthropic Python SDK across all agent and orchestrator code. Bump internal agent models to current versions (`claude-sonnet-4-6` and `claude-haiku-4-5-20251001`). Keep all other AWS infrastructure (Lambda, API Gateway, DynamoDB, S3) unchanged.
+
+### Why this before Phase C
+
+Three reasons:
+1. Every redesign phase from C onward adds new agent code. Writing it against the Anthropic SDK from the start is cheaper than porting it later.
+2. The v2 baseline measurement must be captured on the stack that subsequent phases run on. Capturing on Bedrock then migrating would conflate "SDK changed" with "redesign changed."
+3. Removes AWS-credentials friction from local dev and eval-harness runs.
+
+### Claude Code prompt (paste below)
+
+```
+You are working on POGO v2.1. We are executing Phase B3 of the redesign: migrating from AWS Bedrock to the Anthropic API directly for internal agent calls, and bumping internal agent models to current versions.
+
+Before doing anything, read these files in this order to load context:
+1. WORKFLOW_REDESIGN.md — the target state for v2.1.
+2. PLAN_REDESIGN.md — the implementation plan. Note the Changelog; Phases A, B1, B2 are complete.
+3. ARCHITECTURE.md — current production architecture (will need updating).
+4. The agent and orchestrator source files that make Bedrock calls.
+
+==========
+Stage 0 — Branch consolidation (do this FIRST)
+==========
+
+Phase A landed on `claude/pogo-v2-workflow-redesign-K5tfm`. Phase B1 landed on `claude/pogo-v2-phase-b1-k3205`. Phase B2 landed on `claude/pogo-v2-phase-b2-2SIti`. They are divergent branches.
+
+Consolidate to a single long-lived feature branch `redesign/v2.1`:
+
+1. Check out main (or whatever your trunk is).
+2. Create `redesign/v2.1` from main.
+3. Merge Phase A's branch into `redesign/v2.1`.
+4. Merge Phase B1's branch in. Resolve any PLAN_REDESIGN.md conflicts by keeping ALL changelog entries in chronological order and ALL checkboxes ticked for completed phases.
+5. Merge Phase B2's branch in. Same conflict resolution rule.
+6. Run the full test suite. All 179 tests (B1's count) + 10 (B2's count) = 189 should pass. If anything fails, the merges introduced a real conflict — stop and report.
+7. Push `redesign/v2.1`.
+
+Branch from `redesign/v2.1` for Phase B3 work. Name it `claude/pogo-v2-phase-b3-<random>`.
+
+==========
+Stage 1 — Inventory + design
+==========
+
+1. Grep the codebase for every Bedrock call site. Look for: `bedrock`, `bedrock-runtime`, `invoke_model`, `boto3.client('bedrock`. Produce a list of files and call sites.
+2. For each call site, note: which agent uses it, which Bedrock model ID is currently passed, what the system/user prompt structure looks like, and how the response is parsed.
+3. Identify any shared wrapper or factory that all agents go through (likely in `agents/` or `orchestrator/`). If one exists, the migration centralizes there. If agents call Bedrock directly with no abstraction, this phase should ALSO add a thin client wrapper to centralize the new Anthropic calls.
+4. Produce the inventory in your response before writing any code.
+
+Model ID mapping (use these exact strings):
+- Wherever a Sonnet model was used via Bedrock → `claude-sonnet-4-6`
+- Wherever a Haiku model was used via Bedrock → `claude-haiku-4-5-20251001`
+- Do not introduce Opus calls in this phase. Stick with what was there.
+
+==========
+Stage 2 — Migration
+==========
+
+1. Add `anthropic` to the Lambda dependencies. Lambda packaging in `deploy.sh` must include the new SDK.
+2. Build (or extend, if one exists) a thin client wrapper that wraps `anthropic.Anthropic().messages.create(...)`. The wrapper should:
+   - Read `ANTHROPIC_API_KEY` from env
+   - Accept the same logical params every agent currently passes (model, messages, system prompt, max_tokens, etc.)
+   - Return a normalized response object that has the same shape as what agents currently expect from the Bedrock-parsing code, so agent code doesn't have to change downstream of the call site
+3. Replace every Bedrock call site to use the new wrapper.
+4. Anthropic SDK differences to handle:
+   - System prompts are top-level `system=` param, not in `messages` array (unlike some Bedrock patterns)
+   - Response is `Message` object; text is `.content[0].text`
+   - Token usage is `.usage.input_tokens` and `.usage.output_tokens`
+   - Errors are `anthropic.APIError` subclasses, not `botocore.exceptions.ClientError`. Any retry/error handling needs updating.
+5. Update Lambda environment configuration to inject `ANTHROPIC_API_KEY`. Use a Lambda env var directly (no Secrets Manager). Update `deploy.sh` to set the env var on `update-function-configuration`. The API key should NOT be hardcoded in the script — it should be read from the caller's local shell environment.
+6. Leave existing Bedrock IAM permissions on the Lambda role in place for now. Do not remove them. (Future cleanup.)
+
+==========
+Stage 3 — Tests + docs + smoke test
+==========
+
+1. Update tests:
+   - Replace any Bedrock mocks (likely `moto` or `botocore.stub`) with Anthropic SDK mocks. The cleanest pattern is to mock the wrapper from Stage 2, not the underlying SDK.
+   - All 189 existing tests must still pass.
+   - Add at least 4 new tests covering the new wrapper: happy path, API error, retry behavior (if any), env-var missing → clear error message.
+
+2. Update documentation:
+   - `ARCHITECTURE.md`: change "Bedrock (Claude Sonnet + Haiku)" to "Anthropic API (Claude Sonnet 4.6 + Haiku 4.5)" in the infrastructure section. Update the cost-profile note since per-call rates have changed.
+   - Add a line in the Local Development section (create one if missing): "Set ANTHROPIC_API_KEY in your shell to run agents locally or run the eval harness without AWS model permissions."
+   - `eval/README.md`: update the cost-estimate section with new per-session expectations.
+
+3. Smoke test:
+   - With your `ANTHROPIC_API_KEY` env var set in the sandbox (assume the user will provide it if not already available — if not, log clearly that the smoke test was skipped and explain how the user runs it manually after merging), run one happy-path session end-to-end against a simple prompt. Confirm the orchestrator produces a final accepted prompt.
+   - If smoke test ran: note token counts and approximate cost.
+   - If smoke test skipped: provide the exact command the user should run to validate.
+
+==========
+When Phase B3 is complete
+==========
+
+1. Update PLAN_REDESIGN.md:
+   - Check off Phase B3 in the Status checklist.
+   - Add a Changelog entry with today's date, commit SHA, the list of files migrated, the model ID changes, the new test count, smoke test outcome, and any unexpected behavior differences from the model bump.
+2. Commit with the message: "Phase B3 complete: Bedrock → Anthropic API migration + model bumps"
+3. Push.
+4. Stop. Do not proceed to Phase C without explicit instruction.
+
+In your final response to me, include:
+- The Stage 1 inventory
+- Confirmation that branch consolidation succeeded and all 189 prior tests pass on `redesign/v2.1` before B3 work began
+- New test count after B3
+- Smoke test outcome (or skip reason)
+- Any model-output differences noticed during smoke test (Sonnet 4.6 may behave differently than the previous Bedrock model in subtle ways — flag anything that looks like a regression)
+- Any Bedrock-specific code paths that should be cleaned up later (retry logic, error handling, model-ID utilities, etc.)
+```
+
+### Acceptance criteria for Phase B3
+
+- `redesign/v2.1` exists with Phase A, B1, B2 merged in and 189 tests passing as a starting point
+- No remaining Bedrock SDK calls in the codebase (grep returns nothing meaningful)
+- Anthropic SDK is in deps and Lambda package
+- All agent calls go through the new wrapper using `claude-sonnet-4-6` and `claude-haiku-4-5-20251001`
+- `ANTHROPIC_API_KEY` is required env var; missing key produces a clear error
+- All existing tests pass; new wrapper tests pass
+- ARCHITECTURE.md and eval/README.md updated
+- Smoke test produces a working session end-to-end (or skip reason clearly documented)
+- `PLAN_REDESIGN.md` updated with checked-off status and detailed Changelog entry
+
+---
+
+## Phase C onward
+
+To be drafted after Phase B3 lands and the v2 baseline is captured + rated.
