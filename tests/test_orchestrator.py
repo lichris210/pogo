@@ -411,6 +411,282 @@ class TestCoTPreambleStripping(unittest.TestCase):
         self.assertIn("strict output rules", lower)
 
 
+class TestCriticParseScores(unittest.TestCase):
+    """parse_scores has a JSON path, a regex fallback path, and a default.
+
+    Covered by the orchestrator state tests via the JSON path only; this
+    locks down the regex-fallback and missing-key default behaviour.
+    """
+
+    def test_parse_scores_json_block(self):
+        from agents.critic import parse_scores
+        response = (
+            '```json\n{"clarity": 9, "specificity": 8, "completeness": 7, '
+            '"constraint_coverage": 6, "hallucination_risk": 2, "overall": 8, '
+            '"techniques_identified": ["role_assignment", "few_shot"]}\n```\n'
+            "Solid prompt overall."
+        )
+        scores = parse_scores(response)
+        self.assertEqual(scores["clarity"], 9)
+        self.assertEqual(scores["overall"], 8)
+        self.assertEqual(scores["techniques_identified"], ["role_assignment", "few_shot"])
+
+    def test_parse_scores_regex_fallback_when_no_json(self):
+        from agents.critic import parse_scores
+        response = (
+            "Clarity: 7\n"
+            "Specificity: 8\n"
+            "Completeness: 6\n"
+            "Overall: 7\n"
+        )
+        scores = parse_scores(response)
+        self.assertEqual(scores["clarity"], 7)
+        self.assertEqual(scores["specificity"], 8)
+        self.assertEqual(scores["overall"], 7)
+        # Missing keys default to -1.
+        self.assertEqual(scores["constraint_coverage"], -1)
+        self.assertEqual(scores["hallucination_risk"], -1)
+        # No techniques mentioned anywhere → empty list.
+        self.assertEqual(scores["techniques_identified"], [])
+
+    def test_parse_scores_invalid_json_falls_back_to_regex(self):
+        """Malformed JSON should not crash; regex pass picks up loose values."""
+        from agents.critic import parse_scores
+        response = (
+            "```json\n{this is not valid json}\n```\n"
+            "clarity: 5, specificity: 4, overall: 5"
+        )
+        scores = parse_scores(response)
+        self.assertEqual(scores["clarity"], 5)
+        self.assertEqual(scores["overall"], 5)
+
+
+class TestAgentRouterHelpers(unittest.TestCase):
+    """Phase 6 introduced critic-with-references and live-test routing.
+
+    Cover the helpers the orchestrator relies on for that wiring.
+    """
+
+    def test_resolve_target_model_id_defaults_to_architect(self):
+        from orchestrator import agent_router
+        # No env override → falls back to the architect model.
+        with patch.dict(
+            "os.environ",
+            {k: "" for k in agent_router._TARGET_MODEL_ENV_KEYS.values()},
+            clear=False,
+        ):
+            self.assertEqual(
+                agent_router.resolve_target_model_id("claude"),
+                agent_router.ARCHITECT_MODEL_ID,
+            )
+
+    def test_resolve_target_model_id_uses_env_override(self):
+        from orchestrator import agent_router
+        with patch.dict(
+            "os.environ",
+            {"POGO_TARGET_MODEL_ID_GPT": "openai.gpt-test"},
+            clear=False,
+        ):
+            self.assertEqual(
+                agent_router.resolve_target_model_id("gpt"),
+                "openai.gpt-test",
+            )
+
+    def test_resolve_target_model_id_unknown_family_falls_back(self):
+        from orchestrator import agent_router
+        self.assertEqual(
+            agent_router.resolve_target_model_id("llama"),
+            agent_router.ARCHITECT_MODEL_ID,
+        )
+
+    def test_fetch_reference_prompts_degrades_on_retrieval_error(self):
+        """Retrieval failures must return [] so the agent call still proceeds."""
+        from orchestrator import agent_router
+        with patch(
+            "prompt_db.retrieve.retrieve_reference_prompts",
+            side_effect=RuntimeError("vector store unavailable"),
+        ):
+            result = agent_router.fetch_reference_prompts("code_generation", "claude")
+        self.assertEqual(result, [])
+
+    def test_fetch_reference_prompts_formats_records(self):
+        from orchestrator import agent_router
+        from prompt_db.schema import PromptRecord
+
+        record = PromptRecord(
+            id="ref_1",
+            task_category="code_generation",
+            subcategory="api_endpoint",
+            target_model="claude",
+            format="xml",
+            techniques=["role_assignment"],
+            system_prompt="You are a developer.",
+            user_prompt_template="Build {{X}}.",
+            quality_score=0.91,
+            source="curated",
+        )
+        with patch(
+            "prompt_db.retrieve.retrieve_reference_prompts",
+            return_value=[record],
+        ):
+            result = agent_router.fetch_reference_prompts("code_generation", "claude")
+
+        self.assertEqual(len(result), 1)
+        block = result[0]
+        self.assertIn("id=ref_1", block)
+        self.assertIn("category=code_generation/api_endpoint", block)
+        self.assertIn("role_assignment", block)
+        self.assertIn("You are a developer.", block)
+        self.assertIn("Build {{X}}.", block)
+
+    def test_run_critic_review_injects_references_and_parses(self):
+        """run_critic_review wires references → critic → parsed scores."""
+        from orchestrator import agent_router
+
+        critic_text = (
+            '```json\n{"clarity": 8, "specificity": 7, "completeness": 9, '
+            '"constraint_coverage": 6, "hallucination_risk": 3, "overall": 8, '
+            '"techniques_identified": ["role_assignment"]}\n```\n'
+            "Good prompt overall.\n"
+            "Suggestions:\n"
+            "1. Add a JSON schema.\n"
+            "2. Specify failure handling.\n"
+        )
+        with patch(
+            "orchestrator.agent_router.fetch_reference_prompts",
+            return_value=["[id=ref_1 ...]"],
+        ) as mock_refs, patch(
+            "orchestrator.agent_router.invoke_agent",
+            return_value=critic_text,
+        ) as mock_invoke:
+            from agents.format_profiles import FORMAT_PROFILES
+            result = agent_router.run_critic_review(
+                final_prompt="You are a data analyst...",
+                task_category="data_analysis",
+                format_profile=FORMAT_PROFILES["claude"],
+                target_model="claude",
+            )
+
+        mock_refs.assert_called_once_with("data_analysis", "claude", k=3)
+        mock_invoke.assert_called_once()
+        self.assertEqual(result["scores"]["overall"], 8)
+        self.assertEqual(result["suggestions"], [
+            "Add a JSON schema.",
+            "Specify failure handling.",
+        ])
+        self.assertEqual(result["reference_prompts"], ["[id=ref_1 ...]"])
+
+
+class TestSplitFinalDraft(unittest.TestCase):
+    """``_split_final_draft`` underpins ingestion record construction.
+
+    The orchestrator falls back to system-only when no marker is present;
+    cover each supported marker plus the fallback.
+    """
+
+    def test_system_user_plain_marker(self):
+        from orchestrator.orchestrator import _split_final_draft
+        sys_p, user_p = _split_final_draft(
+            "System: You are an analyst.\nUser: Analyze {{X}}."
+        )
+        self.assertEqual(sys_p, "You are an analyst.")
+        self.assertEqual(user_p, "Analyze {{X}}.")
+
+    def test_xml_markers(self):
+        from orchestrator.orchestrator import _split_final_draft
+        sys_p, user_p = _split_final_draft(
+            "<system>You are a coder.</system><user_prompt>Write {{X}}.</user_prompt>"
+        )
+        self.assertEqual(sys_p, "You are a coder.")
+        self.assertEqual(user_p, "Write {{X}}.")
+
+    def test_no_marker_returns_whole_text_as_system(self):
+        from orchestrator.orchestrator import _split_final_draft
+        sys_p, user_p = _split_final_draft("Just a one-block prompt with no marker.")
+        self.assertEqual(sys_p, "Just a one-block prompt with no marker.")
+        self.assertEqual(user_p, "")
+
+    def test_empty_input(self):
+        from orchestrator.orchestrator import _split_final_draft
+        self.assertEqual(_split_final_draft(""), ("", ""))
+        self.assertEqual(_split_final_draft(None), ("", ""))
+
+
+class TestParseFewshotExamples(unittest.TestCase):
+    """``_parse_fewshot_examples`` feeds the ingested PromptRecord."""
+
+    def test_parses_multiple_examples_with_input_output(self):
+        from orchestrator.orchestrator import _parse_fewshot_examples
+        text = (
+            "Example 1 — typical\n"
+            "Input: customers.csv\n"
+            "Output: 3 churn drivers\n\n"
+            "Example 2 — edge case\n"
+            "Input: empty.csv\n"
+            "Output: no signal, request more data"
+        )
+        examples = _parse_fewshot_examples(text)
+        self.assertEqual(len(examples), 2)
+        self.assertEqual(examples[0]["input"], "customers.csv")
+        self.assertEqual(examples[0]["output"], "3 churn drivers")
+        self.assertEqual(examples[0]["label"], "typical")
+        self.assertEqual(examples[1]["label"], "edge case")
+        self.assertIn("no signal", examples[1]["output"])
+
+    def test_empty_input_returns_empty_list(self):
+        from orchestrator.orchestrator import _parse_fewshot_examples
+        self.assertEqual(_parse_fewshot_examples(""), [])
+        self.assertEqual(_parse_fewshot_examples("   \n\n  "), [])
+
+    def test_block_without_input_output_kept_as_text(self):
+        from orchestrator.orchestrator import _parse_fewshot_examples
+        text = "Example 1 — illustrative\nFreeform prose without structured input/output."
+        examples = _parse_fewshot_examples(text)
+        self.assertEqual(len(examples), 1)
+        self.assertIn("Freeform prose", examples[0]["text"])
+        # The "Example N —" label header should be stripped from .text.
+        self.assertNotIn("Example 1", examples[0]["text"])
+
+
+class TestIngestAcceptedPrompt(unittest.TestCase):
+    """``_ingest_accepted_prompt`` swallows ingestion errors so accept still wins."""
+
+    def test_ingestion_failure_returns_false(self):
+        from orchestrator.orchestrator import _ingest_accepted_prompt
+        from orchestrator.session import create_session
+
+        session = create_session("u", "claude", "Analyze data")
+        session.task_category = "data_analysis"
+        session.current_draft = "System: You are an analyst.\nUser: Analyze {{X}}."
+
+        with patch(
+            "prompt_db.ingest.ingest_single_prompt",
+            side_effect=RuntimeError("DB unreachable"),
+        ):
+            ok = _ingest_accepted_prompt(session, 0.9)
+        self.assertFalse(ok)
+
+    def test_ingestion_success_returns_true(self):
+        from orchestrator.orchestrator import _ingest_accepted_prompt
+        from orchestrator.session import create_session
+
+        session = create_session("u", "claude", "Analyze data")
+        session.task_category = "data_analysis"
+        session.current_draft = "System: You are an analyst.\nUser: Analyze {{X}}."
+
+        with patch(
+            "prompt_db.ingest.ingest_single_prompt",
+            return_value=True,
+        ) as mock_ingest:
+            ok = _ingest_accepted_prompt(session, 0.9)
+
+        self.assertTrue(ok)
+        # The PromptRecord we passed should have come from session state.
+        called_with = mock_ingest.call_args[0][0]
+        self.assertEqual(called_with.task_category, "data_analysis")
+        self.assertEqual(called_with.target_model, "claude")
+
+
 class TestAcceptedPromptHelpers(unittest.TestCase):
 
     def test_build_prompt_record_from_session(self):

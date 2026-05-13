@@ -368,6 +368,117 @@ class TestIngestAndRetrieve(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Seed-normalisation helpers (Phase 7 — _seed_to_record and friends).
+# ---------------------------------------------------------------------------
+
+class TestSeedNormalisation(unittest.TestCase):
+    """Coverage for ingest helpers that don't need a vector store.
+
+    These run pure-Python — no embedder, no store. They lock down the
+    mapping that turns the curated ``seed_prompts.json`` shape into a
+    canonical ``PromptRecord``.
+    """
+
+    def test_normalise_target_model_known_families(self):
+        from prompt_db.ingest import _normalise_target_model
+        self.assertEqual(_normalise_target_model("claude-opus-4-6"), "claude")
+        self.assertEqual(_normalise_target_model("gpt-4o"), "gpt")
+        self.assertEqual(_normalise_target_model("openai/o1-mini"), "gpt")
+        self.assertEqual(_normalise_target_model("gemini-1.5-pro"), "gemini")
+
+    def test_normalise_target_model_unknown_falls_back_to_claude(self):
+        from prompt_db.ingest import _normalise_target_model
+        self.assertEqual(_normalise_target_model(""), "claude")
+        self.assertEqual(_normalise_target_model("llama-3"), "claude")
+
+    def test_split_system_user_extracts_both_sections(self):
+        from prompt_db.ingest import _split_system_user
+        text = "System: You are an analyst.\nUser:\nAnalyze {{X}}."
+        sys_p, user_p = _split_system_user(text)
+        self.assertEqual(sys_p, "You are an analyst.")
+        self.assertEqual(user_p, "Analyze {{X}}.")
+
+    def test_split_system_user_no_marker_keeps_as_user(self):
+        from prompt_db.ingest import _split_system_user
+        sys_p, user_p = _split_system_user("Just a single block.")
+        self.assertEqual(sys_p, "")
+        self.assertEqual(user_p, "Just a single block.")
+
+    def test_seed_to_record_maps_unknown_category_to_general(self):
+        from prompt_db.ingest import _seed_to_record
+        record = _seed_to_record({
+            "id": "seed_test_001",
+            "task_category": "made_up_category",
+            "target_model": "claude-opus-4-6",
+            "prompt_text": "System: You are X.\nUser: Do Y.",
+            "techniques_used": ["role_assignment"],
+            "quality_score": 0.9,
+            "source_type": "curated",
+        })
+        self.assertEqual(record.task_category, "general")
+        self.assertEqual(record.subcategory, "made_up_category")
+        self.assertEqual(record.target_model, "claude")
+        self.assertEqual(record.system_prompt, "You are X.")
+        self.assertEqual(record.user_prompt_template, "Do Y.")
+
+    def test_seed_to_record_canonical_category_passes_through(self):
+        from prompt_db.ingest import _seed_to_record
+        record = _seed_to_record({
+            "id": "seed_test_002",
+            "task_category": "code_generation",
+            "target_model": "gpt-4o",
+            "prompt_text": "Write a function.",
+            "techniques_used": [],
+            "quality_score": 0.8,
+        })
+        self.assertEqual(record.task_category, "code_generation")
+        self.assertEqual(record.subcategory, "code_generation")
+        self.assertEqual(record.target_model, "gpt")
+        self.assertEqual(record.format, "markdown")
+
+
+# ---------------------------------------------------------------------------
+# Admin-helper validation (Phase 7).
+# ---------------------------------------------------------------------------
+
+class TestAdminValidation(unittest.TestCase):
+    """``update_score`` validates bounds; ``remove_prompt`` reports missing IDs.
+
+    These run against an empty tmp store — no real records needed since
+    we're testing the rejection / not-found paths.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="pogo-admin-")
+        self._prev = os.environ.get("POGO_PROMPT_DB_LOCAL_DIR")
+        os.environ["POGO_PROMPT_DB_LOCAL_DIR"] = self._tmp
+        from prompt_db.retrieve import reset_cache
+        reset_cache()
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("POGO_PROMPT_DB_LOCAL_DIR", None)
+        else:
+            os.environ["POGO_PROMPT_DB_LOCAL_DIR"] = self._prev
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_update_score_rejects_out_of_range(self):
+        from prompt_db.admin import update_score
+        with self.assertRaises(ValueError):
+            update_score("anything", 1.5)
+        with self.assertRaises(ValueError):
+            update_score("anything", -0.1)
+
+    def test_remove_prompt_returns_false_when_missing(self):
+        from prompt_db.admin import remove_prompt
+        self.assertFalse(remove_prompt("does_not_exist"))
+
+    def test_update_score_returns_false_when_missing(self):
+        from prompt_db.admin import update_score
+        self.assertFalse(update_score("does_not_exist", 0.5))
+
+
+# ---------------------------------------------------------------------------
 # Fallback behaviour when the store is empty.
 # ---------------------------------------------------------------------------
 

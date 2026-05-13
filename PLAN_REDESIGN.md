@@ -51,17 +51,22 @@ Fixed three bugs:
 
 **2026-05-12 — Phase B1 complete (commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`)**
 
-Test backfill for original PLAN.md Phases 6–7. Test count: 145 → 179 (+34 tests). Zero bugs surfaced.
+Backfilled unit test coverage for code introduced in original PLAN.md Phases 6 (Critic + Live Testing) and 7 (Prompt Ingestion Loop). All Bedrock and vector-store calls remain mocked so the suite runs offline.
 
-Modules covered:
-- `orchestrator/live_test.py` (+7 tests: TestCleanGeneratedInput, TestFallbackTestInput, TestRunLiveTestFallback)
-- `agents/critic.parse_scores` (+3 tests: TestCriticParseScores covering JSON path, regex fallback, malformed JSON)
-- `orchestrator/agent_router.py` (+6 tests: TestAgentRouterHelpers covering resolve_target_model_id variants, fetch_reference_prompts fallback, run_critic_review wiring)
-- `orchestrator/orchestrator._split_final_draft` (+4 tests)
-- `orchestrator/orchestrator._parse_fewshot_examples` (+3 tests)
-- `orchestrator/orchestrator._ingest_accepted_prompt` (+2 tests)
-- `prompt_db/ingest.py` seed helpers (+6 tests: TestSeedNormalisation)
-- `prompt_db/admin.py` (+3 tests: TestAdminValidation)
+Stage 1 inventory (module → gap → tests added):
+
+- `orchestrator/live_test.py` → `_clean_generated_input`, `_fallback_test_input`, and the empty-generator-fallback branch of `run_live_test` were untested. **+7 tests** in `tests/test_live_test.py` (`TestCleanGeneratedInput`, `TestFallbackTestInput`, `TestRunLiveTestFallback`).
+- `agents/critic.parse_scores` → only the JSON happy path was exercised indirectly through orchestrator state tests; the regex fallback and missing-key defaults were untested. **+3 tests** in `tests/test_orchestrator.py::TestCriticParseScores`.
+- `orchestrator/agent_router.py` → `resolve_target_model_id`, `fetch_reference_prompts` (formatting + retrieval-error fallback), and `run_critic_review` (the end-to-end critic-with-references wiring introduced in Phase 6) had no direct tests. **+6 tests** in `tests/test_orchestrator.py::TestAgentRouterHelpers`.
+- `orchestrator/orchestrator._split_final_draft` → only one marker style was covered via `_build_prompt_record_from_session`; XML markers, the no-marker fallback, and empty input were untested. **+4 tests** in `tests/test_orchestrator.py::TestSplitFinalDraft`.
+- `orchestrator/orchestrator._parse_fewshot_examples` → multi-example parsing, empty input, and the "block without Input/Output" branch were untested. **+3 tests** in `tests/test_orchestrator.py::TestParseFewshotExamples`.
+- `orchestrator/orchestrator._ingest_accepted_prompt` → the swallow-on-failure contract relied on by `_handle_accepted` was untested. **+2 tests** in `tests/test_orchestrator.py::TestIngestAcceptedPrompt`.
+- `prompt_db/ingest.py` seed-normalisation helpers (`_normalise_target_model`, `_split_system_user`, `_seed_to_record`) → exercised indirectly via the seed-ingest integration test but with no unit-level assertions on mapping correctness. **+6 tests** in `tests/test_prompt_db.py::TestSeedNormalisation`.
+- `prompt_db/admin.py` → `update_score` bounds-check and the "ID not found" branches of `remove_prompt`/`update_score` were untested. **+3 tests** in `tests/test_prompt_db.py::TestAdminValidation`.
+
+Test count: 145 → **179** (added 34 tests). All tests pass.
+
+Bugs surfaced during Stage 3: **none**. The new tests confirmed existing Phase 6–7 behaviour rather than uncovering regressions.
 
 **2026-05-13 — Phase B2 complete (commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`)**
 
