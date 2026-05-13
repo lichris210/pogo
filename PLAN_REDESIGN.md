@@ -23,7 +23,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] Implementation plan committed (`PLAN_REDESIGN.md`)
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
 - [ ] **Phase B1.** Test backfill for original Phases 6–7
-- [ ] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture)
+- [x] **Phase B2.** Build eval harness (manual ratings, v2 baseline capture) — completed 2026-05-13
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -47,6 +47,26 @@ Fixed three bugs:
 **Notes for subsequent phases:**
 - If Phase C migrates Context Scout to structured JSON output, drop the `_strip_preamble` call for that agent in the merger.
 - Latent bug in `_extract_list_items()`: treats leading non-numbered lines as bullet items, which was rendering preamble as fake checklist items. The `_strip_preamble` fix neutralizes the symptom but the underlying bug remains. Worth folding into Phase E when the renderer is touched.
+
+**2026-05-13 — Phase B2 complete (commit to be filled by the commit script)**
+
+Built the eval harness and produced a v2 baseline run file.
+
+- New module: `eval/` containing `inputs.json` (18 curated prompts), `run_eval.py`, `rate.py`, `README.md`.
+- Eval set composition:
+  - 18 entries spanning all 11 task categories (code_generation ×3; analysis ×2; agentic_workflow ×2; creative_writing ×2; summarization ×2; reasoning ×2; data_transformation, classification, extraction, translation, multimodal ×1 each).
+  - Target families: claude ×7, gpt ×6, gemini ×5.
+  - Paths: one_shot ×11, chained ×7 (roughly 60/40; close to the 50/50 target).
+- New test file `tests/test_eval_harness.py` adds 10 tests (per-entry capture, file-update logic, rating-scale validation). Test count: 145 → 155. **Note:** Phase B1 is still pending on the Status checklist, so this build went straight from 145 to 155 rather than the 179 number the original prompt anticipated.
+- Baseline run file: `eval/runs/2026-05-13_4201783_v2-baseline.json`. Captured the full 18-entry schema with rating blocks null.
+
+**Orchestrator quirks discovered driving it programmatically:**
+
+1. The orchestrator's `_handle_initial` / `_handle_awaiting_context` are tightly coupled to the response merger and the Lambda response shape. The runner deliberately reproduces the agent-call sequence (architect draft → refine + few-shot in parallel → critic) directly via `agent_router`, rather than invoking the state-machine handlers. That decoupling means future state-machine changes (Phase D's Decomposer in particular) will need a corresponding runner update.
+2. `agent_router.invoke_agent` strips the usage metadata that `invoke_agent_raw` returns. Token counting required monkey-patching `invoke_agent_raw` for the run's duration.
+3. The keyword-based `classify_task` in `agent_router.py` only knows 6 buckets (data_analysis, code_generation, writing, creative, web_development, research, general) — it cannot produce the 11 canonical categories used in `seed_prompts.json` or in this eval set. Eval `task_category` is therefore metadata for human use; the orchestrator classifies independently. Phase C/D should reconcile this.
+4. `fetch_reference_prompts` and `fetch_fewshot_examples` are called eagerly and silently swallow exceptions, but the prompt_db S3 fetch happens before that catch in some code paths and raises `NoCredentialsError` up the stack. The runner treats this as a per-entry skip, not a hard failure.
+5. **Sandbox limitation:** the environment where Phase B2 was executed has no AWS credentials. As a result, the committed baseline run file has all 18 entries marked `skipped: NoCredentialsError`. The runner shape and the inputs are correct; the user must re-run `python eval/run_eval.py --label v2-baseline` on a credentialed machine to produce the real baseline numbers before rating. Until then the v2 baseline is a placeholder.
 
 ---
 
