@@ -134,6 +134,167 @@ In your final response to me, include:
 
 ---
 
-## Phase B2 onward
+## Phase B2 — Build the Eval Harness (Manual Ratings, v2 Baseline)
 
-To be drafted after Phase B1 lands. Phase B2 builds the eval harness (Option A: manual ratings only, designed to allow LLM-as-judge and downstream verification to be added later).
+### Goal
+
+Build an eval harness that captures POGO's outputs across a fixed set of inputs and stores them for human rating. Run it against current production code to lock in a v2 baseline. Future redesign phases will run the same eval against their changes; comparing ratings reveals real quality improvements versus regressions.
+
+### Why this before Phase C
+
+Every redesign phase from C onward changes pipeline behavior (new Research agent scope, new Decomposer, new per-phase RAG). Without a baseline measurement, "did this help?" is unanswerable. The harness only earns its keep if the v2 baseline is captured before any behavior changes ship.
+
+### Scope (Option A — manual ratings only)
+
+This phase builds the minimum useful eval harness:
+- A curated eval input set (~15–20 prompts)
+- A runner script that drives POGO programmatically and captures full pipeline output
+- A simple CLI rating tool
+- A v2 baseline run with ratings captured
+
+Out of scope (deferred for later phases): LLM-as-judge scoring, downstream verification (does the output actually produce working code), web UI for rating.
+
+### Claude Code prompt (paste below)
+
+```
+You are working on POGO v2.1. We are executing Phase B2 of the redesign.
+
+Before doing anything, read these files in this order to load context:
+1. WORKFLOW_REDESIGN.md — the target state for v2.1.
+2. PLAN_REDESIGN.md — this implementation plan. Note the Changelog; Phases A and B1 are complete.
+3. ARCHITECTURE.md — current production architecture.
+4. orchestrator/agent_router.py, orchestrator/orchestrator.py, and orchestrator/live_test.py — these are how you'll drive the pipeline programmatically.
+5. seed_prompts.json — reference for the 11 task categories.
+
+Your task is to build the eval harness in four stages. The harness is for manual ratings only in this phase; LLM-as-judge and downstream verification will be added later.
+
+==========
+Stage 1 — Curate the eval input set
+==========
+
+Build a fresh eval set at eval/inputs.json. Curate 15–20 prompts spanning the 11 task categories (analysis, agentic_workflow, code_generation, creative_writing, data_transformation, classification, extraction, summarization, reasoning, multimodal, translation).
+
+Do NOT draw from seed_prompts.json. The seed prompts are training data for the vector DB; using them as eval inputs creates a measurement-contamination problem.
+
+Each eval entry has this shape:
+
+{
+  "id": "eval_001",
+  "task_category": "code_generation",
+  "target_model_family": "claude",
+  "expected_path": "one_shot" | "chained",
+  "user_prompt": "the original prompt as a user would submit it",
+  "pre_baked_context": "optional context to skip Clarifier interaction",
+  "notes": "what makes this prompt interesting for eval"
+}
+
+Mix the set roughly 50/50 between one-shot-suitable and chain-suitable prompts. Spread target_model_family across claude/gpt/gemini. Include realistic prompts of varying complexity. Avoid trivial prompts and avoid prompts that overlap with seed_prompts.json content.
+
+==========
+Stage 2 — Build the eval runner
+==========
+
+Create eval/run_eval.py. The runner:
+
+1. Loads eval/inputs.json.
+2. For each entry, drives the POGO orchestrator programmatically (use the agent_router and orchestrator entry points; do not call the Lambda API). Use pre_baked_context to skip Clarifier interaction where possible. If a prompt cannot complete without Clarifier interaction, log it and skip that entry rather than failing the whole run.
+3. Captures, per entry: the Architect draft, the Critic score and feedback, the final output, and the elapsed time and token count.
+4. Writes results to eval/runs/<YYYY-MM-DD>_<commit_sha_short>_<branch>.json.
+
+Output schema per entry:
+
+{
+  "eval_id": "eval_001",
+  "input": { ...the original eval entry... },
+  "captured": {
+    "architect_draft": "...",
+    "critic_score": 0.0,
+    "critic_feedback": "...",
+    "final_output": "...",
+    "elapsed_seconds": 0.0,
+    "token_count": 0
+  },
+  "rating": {
+    "score": null,
+    "notes": null,
+    "rated_at": null
+  }
+}
+
+The "rating" block stays null on first capture. The rating CLI in Stage 3 fills it in.
+
+==========
+Stage 3 — Build the rating CLI
+==========
+
+Create eval/rate.py. The rate CLI:
+
+1. Takes a run file path as argument.
+2. Walks through each entry where rating.score is null.
+3. Prints the eval input, the captured output, and the Critic score.
+4. Prompts for: score (1–5 integer) and optional notes.
+5. Writes back to the same file with rating.score and rating.rated_at populated.
+6. Allows quitting partway — partial ratings are preserved.
+
+Rating scale documented in eval/README.md (Stage 4):
+- 1: Output is unusable or wrong
+- 2: Output is below baseline quality
+- 3: Output is acceptable, equivalent to baseline expectation
+- 4: Output is above baseline expectation
+- 5: Output is significantly better than baseline expectation
+
+==========
+Stage 4 — Capture the v2 baseline + documentation
+==========
+
+1. Write eval/README.md explaining:
+   - What the eval harness is for
+   - How to add new eval entries to inputs.json
+   - How to run a full eval (`python eval/run_eval.py`)
+   - How to rate outputs (`python eval/rate.py eval/runs/<file>.json`)
+   - Rating scale criteria
+   - How to compare across runs (manual diff for now; tooling deferred to later phase)
+   - Cost expectation per run (estimate based on Bedrock pricing × eval set size)
+
+2. Run the eval against current production code: `python eval/run_eval.py`. This produces eval/runs/<today>_<sha>_v2-baseline.json.
+
+3. Do NOT rate the baseline yourself. The user will rate it separately. Leave all rating blocks null.
+
+4. Add eval/ to .gitignore for the runs/ subdirectory? No — runs ARE the historical record and should be committed. Only generated cache files should be gitignored if any are created.
+
+==========
+Validation
+==========
+
+- All 179 existing tests still pass.
+- Add at least 3 new unit tests for the eval harness (eval/run_eval.py and eval/rate.py): one for the runner's per-entry capture logic, one for the rate CLI's file-update logic, one for the rating-scale validation.
+- A baseline run file exists at eval/runs/<today>_<sha>_v2-baseline.json with all entries captured (or logged-and-skipped) and ratings null.
+
+==========
+When Phase B2 is complete
+==========
+
+1. Update PLAN_REDESIGN.md:
+   - Check off Phase B2 in the Status checklist.
+   - Add a Changelog entry with today's date, commit SHA, eval set size and category distribution, baseline run file path, number of entries successfully captured vs skipped, and any orchestrator quirks discovered when driving it programmatically.
+2. Commit with the message: "Phase B2 complete: eval harness + v2 baseline captured"
+3. Push.
+4. Stop. Do not proceed to Phase C without explicit instruction.
+
+In your final response to me, include:
+- The eval set composition (counts per category, per model family, one_shot vs chained)
+- Any prompts that had to be skipped because Clarifier interaction couldn't be bypassed
+- Total cost of the baseline run (Bedrock token usage × rates)
+- Confirmation all tests pass
+- The baseline run file path
+```
+
+### Acceptance criteria for Phase B2
+
+- `eval/inputs.json` exists with 15–20 curated entries spanning all 11 task categories
+- `eval/run_eval.py` drives the orchestrator programmatically and captures outputs
+- `eval/rate.py` provides a working CLI for adding manual ratings
+- `eval/README.md` documents the workflow
+- Baseline run captured at `eval/runs/<date>_<sha>_v2-baseline.json` with ratings null
+- All existing tests pass; new harness tests pass
+- `PLAN_REDESIGN.md` updated with checked-off status and detailed Changelog entry
