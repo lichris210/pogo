@@ -13,6 +13,13 @@ HANDLER="handler.lambda_handler"
 TIMEOUT=90
 MEMORY=1024
 
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "ERROR: ANTHROPIC_API_KEY is not set in the shell."
+  echo "       Export it before running deploy.sh, e.g.:"
+  echo "         export ANTHROPIC_API_KEY=sk-ant-..."
+  exit 1
+fi
+
 echo "=== POGO Deployment ==="
 
 # --- Step 1: Create IAM Role ---
@@ -100,13 +107,23 @@ aws lambda update-function-code \
   --function-name $FUNCTION_NAME \
   --zip-file fileb:///tmp/pogo-lambda.zip \
   --region $REGION \
- 
+
 
 echo "  Lambda function deployed!"
 
 # Wait for function to be active
 echo "  Waiting for function to be active..."
 aws lambda wait function-active --function-name $FUNCTION_NAME --region $REGION
+
+# Inject ANTHROPIC_API_KEY from the local shell into Lambda env vars.
+# The key is read from the caller's environment — never hardcoded here.
+echo "  Configuring Lambda environment (ANTHROPIC_API_KEY)..."
+aws lambda update-function-configuration \
+  --function-name $FUNCTION_NAME \
+  --region $REGION \
+  --environment "Variables={ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY}" \
+  > /dev/null
+aws lambda wait function-updated --function-name $FUNCTION_NAME --region $REGION
 
 # --- Step 4: Create API Gateway ---
 echo ""

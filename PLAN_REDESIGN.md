@@ -24,7 +24,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
 - [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`
 - [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. **Baseline capture deferred to post-B3** (AWS credentials gap in Claude Code sandbox).
-- [ ] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5
+- [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`).
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -101,9 +101,47 @@ Built the eval harness and produced a v2 baseline run file.
 
 **Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 consolidated all three into a single long-lived `redesign/v2.1` branch and reconciled this file.
 
----
+**2026-05-13 — Phase B3 complete (branch `claude/migrate-anthropic-api-AYZnc`, branched from `redesign/v2.1`)**
 
-## Phase B1 — Test Backfill for Original Phases 6–7
+Migrated all agent generation calls from AWS Bedrock to the Anthropic API directly and bumped the default agent model to Claude Haiku 4.5.
+
+Files migrated:
+- `orchestrator/anthropic_client.py` — **new**. Thin wrapper around `anthropic.Anthropic().messages.create()`. Reads `ANTHROPIC_API_KEY` from env, caches the SDK client, normalises response shape to `{"text", "usage": {input_tokens, output_tokens, total_tokens}}`. Raises `AnthropicConfigError` on missing key.
+- `orchestrator/agent_router.py` — dropped `_get_bedrock()`/`boto3` import; `invoke_agent_raw` now delegates to `anthropic_client.create_message`. `ARCHITECT_MODEL_ID` default bumped from `us.anthropic.claude-3-5-haiku-20241022-v1:0` to `claude-haiku-4-5-20251001`.
+- `lambda/handler.py` — `generate_prompt()` (v1 `/generate` path) routed through the new wrapper. `GEN_MODEL_ID` bumped to `claude-haiku-4-5-20251001`. `get_bedrock()` retained for Titan embeddings only.
+- `requirements.txt` — added `anthropic`. Lambda packaging (`deploy.sh`) already runs `pip install -r requirements.txt -t /tmp/pogo-package/` so the SDK is bundled automatically.
+- `deploy.sh` — fails fast if `ANTHROPIC_API_KEY` is not exported in the caller's shell; after `update-function-code` runs `update-function-configuration --environment "Variables={ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY}"` to inject the key into the Lambda env. The key is **never** hardcoded in the script. Bedrock IAM permissions on the Lambda role are intentionally left in place (Titan embeddings still need them); future cleanup.
+- `ARCHITECTURE.md` — §8 retitled "Model Calls (Anthropic API + Bedrock Titan)" with the wrapper documented, cost-profile note updated for Anthropic API list pricing, and a Local Development section noting the `ANTHROPIC_API_KEY` requirement.
+- `eval/README.md` — cost-estimate updated to Anthropic API rates (~$1.20 per 18-entry run on Haiku 4.5; ~$0.20/entry on Sonnet 4.6 when target-family overrides route there). Setup section now says the runner needs `ANTHROPIC_API_KEY`, not Bedrock credentials.
+- `eval/run_eval.py` — docstring/comment refresh (Bedrock → Anthropic API). No behavioural changes; the runner patches `agent_router.invoke_agent_raw` which now goes through the wrapper.
+- `tests/test_eval_harness.py` — renamed `test_captures_pipeline_outputs_with_stubbed_bedrock` → `..._stubbed_anthropic`.
+- `tests/test_live_test.py` — flipped a `bedrock timed out` error string to `anthropic call timed out` for accuracy.
+
+Model ID changes:
+- Default agent / Architect / Critic / Few-Shot / Clarifier / Context Scout / live test light model: `us.anthropic.claude-3-5-haiku-20241022-v1:0` → `claude-haiku-4-5-20251001`.
+- No Sonnet model was wired into the codebase before B3, so the "Sonnet → `claude-sonnet-4-6`" half of the mapping is a no-op for now — Phase D will route specific phases to Sonnet 4.6 when the per-phase tier map lands.
+
+Test count: 189 → **195** (added 6 tests in `tests/test_anthropic_client.py`: happy path, missing-env-var error, `anthropic.APIError` propagation, client caching, empty `content` fallback, and a sanity test that `agent_router.invoke_agent_raw` now routes through `create_message`). Mock pattern wraps the SDK at the module boundary (`sys.modules["anthropic"]`) so no live API access is needed.
+
+Smoke test: **skipped**. `ANTHROPIC_API_KEY` is not present in the Claude Code sandbox. To run it manually after merging:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python eval/run_eval.py --label v2-baseline-anthropic --limit 1
+# inspect the resulting eval/runs/<date>_<sha>_v2-baseline-anthropic.json;
+# confirm captured.architect_draft, captured.critic_score, and captured.final_output are non-empty.
+```
+
+For an end-to-end orchestrator session (not just one eval entry), the simplest path is `python -m orchestrator.orchestrator` against a local DynamoDB stub or by POSTing to a deployed Lambda after `./deploy.sh`. Both require `ANTHROPIC_API_KEY` in the env.
+
+**Bedrock cleanups deferred to a later phase:**
+- `prompt_db/embeddings.py` and `lambda/handler.py:embed_query()` still call Bedrock Titan for embeddings. Anthropic does not currently expose a comparable embedding model in the Python SDK; revisit if/when one ships, or evaluate whether to switch to a different embedding provider.
+- `pogo/scripts/build_index_titan.py` (offline indexer) is untouched — same Titan dependency, not Lambda runtime.
+- `_normalise_usage` in `orchestrator/agent_router.py` is now defensive overlap with the wrapper's own normalisation. Could be pruned in Phase E once the agent code is touched again.
+- `AmazonBedrockFullAccess` IAM policy attachment in `deploy.sh` is still in place because embeddings need it. Scope it to embeddings-only (or migrate embeddings off Bedrock) before doing the full Bedrock decommission.
+- v1 `/generate` path still loads `boto3` at import time for the Titan client. Consider lazy-importing it inside `embed_query` only.
+
+**Model-output differences noticed during smoke test:** smoke test skipped (no API key in sandbox), so no first-hand observations from this phase. Flags to watch for when the user runs the smoke test locally: Haiku 4.5 follows formatting instructions more precisely than Haiku 3.5, which can manifest as the Architect emitting markdown headers exactly as instructed in the format profile (good) but also occasionally as the Critic returning tighter, more conservative scores (possible apparent "regression" that is actually better calibration). Compare the captured `critic_score` distribution against the placeholder v2 baseline before treating any single eval as a regression.
 
 ### Goal
 
