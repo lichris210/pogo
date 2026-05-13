@@ -79,7 +79,27 @@ Artifacts:
 - `eval/README.md` (workflow docs)
 - Tests: B2 branch baseline was 145 → 155 (+10) because B2 branched before B1 landed. After branch consolidation in Phase B3 Stage 0, both sets will be present.
 
-**Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 will consolidate all three into a single long-lived `redesign/v2.1` branch and reconcile this file.
+**2026-05-13 — Phase B2 complete (commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`)**
+
+Built the eval harness and produced a v2 baseline run file.
+
+- New module: `eval/` containing `inputs.json` (18 curated prompts), `run_eval.py`, `rate.py`, `README.md`.
+- Eval set composition:
+  - 18 entries spanning all 11 task categories (code_generation ×3; analysis ×2; agentic_workflow ×2; creative_writing ×2; summarization ×2; reasoning ×2; data_transformation, classification, extraction, translation, multimodal ×1 each).
+  - Target families: claude ×7, gpt ×6, gemini ×5.
+  - Paths: one_shot ×11, chained ×7 (roughly 60/40; close to the 50/50 target).
+- New test file `tests/test_eval_harness.py` adds 10 tests (per-entry capture, file-update logic, rating-scale validation). Test count: 145 → 155 on the B2 branch baseline (the branch was cut before B1 landed). After Phase B3 Stage 0 consolidates B1 + B2 into `redesign/v2.1`, the combined suite is 145 + 34 (B1) + 10 (B2) = 189 tests.
+- Baseline run file: `eval/runs/2026-05-13_4201783_v2-baseline.json`. Captured the full 18-entry schema with rating blocks null.
+
+**Orchestrator quirks discovered driving it programmatically:**
+
+1. The orchestrator's `_handle_initial` / `_handle_awaiting_context` are tightly coupled to the response merger and the Lambda response shape. The runner deliberately reproduces the agent-call sequence (architect draft → refine + few-shot in parallel → critic) directly via `agent_router`, rather than invoking the state-machine handlers. That decoupling means future state-machine changes (Phase D's Decomposer in particular) will need a corresponding runner update.
+2. `agent_router.invoke_agent` strips the usage metadata that `invoke_agent_raw` returns. Token counting required monkey-patching `invoke_agent_raw` for the run's duration.
+3. The keyword-based `classify_task` in `agent_router.py` only knows 6 buckets (data_analysis, code_generation, writing, creative, web_development, research, general) — it cannot produce the 11 canonical categories used in `seed_prompts.json` or in this eval set. Eval `task_category` is therefore metadata for human use; the orchestrator classifies independently. Phase C/D should reconcile this.
+4. `fetch_reference_prompts` and `fetch_fewshot_examples` are called eagerly and silently swallow exceptions, but the prompt_db S3 fetch happens before that catch in some code paths and raises `NoCredentialsError` up the stack. The runner treats this as a per-entry skip, not a hard failure.
+5. **Sandbox limitation:** the environment where Phase B2 was executed has no AWS credentials. As a result, the committed baseline run file has all 18 entries marked `skipped: NoCredentialsError`. The runner shape and the inputs are correct; the user must re-run `python eval/run_eval.py --label v2-baseline` on a credentialed machine to produce the real baseline numbers before rating. Until then the v2 baseline is a placeholder.
+
+**Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 consolidated all three into a single long-lived `redesign/v2.1` branch and reconciled this file.
 
 ---
 

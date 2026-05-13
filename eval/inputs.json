@@ -1,0 +1,164 @@
+[
+  {
+    "id": "eval_001",
+    "task_category": "code_generation",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "Build a small Flask web app that lets a user upload a CSV, validates the schema against a provided JSON spec, persists the rows to SQLite, and exposes a /search endpoint that returns matching rows as JSON.",
+    "pre_baked_context": "Schema spec is a JSON file with columns: name (string, required), email (string, required, RFC 5322), age (int, 0-120, optional). SQLite database lives at ./data/uploads.db. /search accepts ?name= and ?min_age= query params and returns up to 100 rows. No auth needed; this is for local use. Python 3.11, Flask 3.x, pytest for tests. Code should be production-shaped but pragmatic, not enterprise-grade.",
+    "notes": "Multi-component build (validation + persistence + API). Strong chained-path candidate because of the natural phase split: schema, ingest, API."
+  },
+  {
+    "id": "eval_002",
+    "task_category": "code_generation",
+    "target_model_family": "gpt",
+    "expected_path": "one_shot",
+    "user_prompt": "Write a TypeScript utility that takes an array of objects and a path string like 'user.profile.address.city' and safely returns the nested value, or undefined if any segment is missing. Include unit tests.",
+    "pre_baked_context": "Use TypeScript strict mode. Tests in Jest. No external dependencies. The path string may contain array indices like 'items[0].name'. Treat null and undefined intermediate values as 'missing' (return undefined).",
+    "notes": "Self-contained utility with clear shape; classic one-shot."
+  },
+  {
+    "id": "eval_003",
+    "task_category": "analysis",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "Analyze a SaaS company's monthly churn data and produce an executive summary identifying the top three drivers of churn and recommended retention experiments.",
+    "pre_baked_context": "Data: 18 months of churn by customer segment (SMB / mid-market / enterprise), plan tier, and primary use case. The data is already cleaned in a wide-format CSV. Audience for the summary is the CEO and head of customer success. Target length: 1 page. Recommendations should be experimentally testable within one quarter.",
+    "notes": "Analysis + persuasive writing. Phases: data interrogation, driver hypothesis, recommendation framing."
+  },
+  {
+    "id": "eval_004",
+    "task_category": "agentic_workflow",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "Design an agent that monitors a GitHub repo, drafts PR reviews when new pull requests are opened, posts the review as a comment, and re-reviews on push events. Specify the agent's tools, prompts, and failure handling.",
+    "pre_baked_context": "Repo is private. The agent runs on a cron + webhook listener; assume infra is provided. Tools available: GitHub API (read PR diff, post comment), an LLM endpoint, and a key-value store for state. Failure handling should be explicit (retry policy, idempotency on duplicate webhook deliveries, max review length).",
+    "notes": "Multi-step agentic design; needs careful tool-and-state specification. Strongly chained."
+  },
+  {
+    "id": "eval_005",
+    "task_category": "creative_writing",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "Write a 500-word short story about a lighthouse keeper who discovers their lighthouse has been guiding ships to the wrong shore for decades. The tone should be quiet, contemplative, and ambiguous about whether the protagonist is responsible.",
+    "pre_baked_context": "First-person POV, present tense. Avoid moralizing; let the reader sit with the ambiguity. No dialogue tags like 'said angrily'; show emotion through action and image. End with an image, not a resolution.",
+    "notes": "Single-pass creative output; one-shot is the right path."
+  },
+  {
+    "id": "eval_006",
+    "task_category": "data_transformation",
+    "target_model_family": "gpt",
+    "expected_path": "one_shot",
+    "user_prompt": "Convert a flat list of order line items into a per-customer summary with total spend, average order value, and most-purchased product category.",
+    "pre_baked_context": "Input format: array of objects with {order_id, customer_id, product_id, category, quantity, unit_price, ts}. Output: array of {customer_id, total_spend, aov, top_category}. Use vanilla JavaScript or Python (your choice — pick one and commit). Tie-breaks for top_category: alphabetical first.",
+    "notes": "Bounded transformation; one-shot is natural."
+  },
+  {
+    "id": "eval_007",
+    "task_category": "classification",
+    "target_model_family": "claude",
+    "expected_path": "one_shot",
+    "user_prompt": "Build a prompt that classifies inbound customer support tickets into urgency (low/medium/high/critical) and routing destination (billing, technical, account, other).",
+    "pre_baked_context": "Tickets are 1-3 sentence customer messages. The classifier should return JSON: {urgency, routing, confidence, reasoning}. Confidence is a float 0-1. Critical is reserved for outages affecting business operations or data loss. Examples must include at least one edge case (ambiguous routing).",
+    "notes": "Classification with structured output; one-shot."
+  },
+  {
+    "id": "eval_008",
+    "task_category": "extraction",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "Extract structured event data (title, start, end, location, attendees) from free-form meeting notes in email threads.",
+    "pre_baked_context": "Input is a single email thread (plain text, multiple replies). Output JSON: {events: [{title, start_iso, end_iso, location, attendees: [emails]}]}. Dates and times are often relative ('tomorrow at 3'); resolve them relative to the latest email's Date header, which is provided. If a field is missing, omit it. Multiple events per thread are possible.",
+    "notes": "Structured extraction with relative-date resolution; classic one-shot."
+  },
+  {
+    "id": "eval_009",
+    "task_category": "summarization",
+    "target_model_family": "gpt",
+    "expected_path": "one_shot",
+    "user_prompt": "Summarize a long technical post-mortem document into a TL;DR for engineers, plus a separate plain-language version for non-technical stakeholders.",
+    "pre_baked_context": "Input is a 3000-5000 word post-mortem. Engineer TL;DR: 5 bullets, technical terminology preserved, must include root cause, blast radius, and what changed. Stakeholder version: 3-4 sentences, no jargon, focus on customer impact and what's being done. Do not invent details not in the source.",
+    "notes": "Dual-audience summarization; one-shot."
+  },
+  {
+    "id": "eval_010",
+    "task_category": "reasoning",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "A logistics company wants to know whether routing all packages through one regional hub is cheaper than two hubs. Walk through the decision with explicit assumptions and a quantitative comparison.",
+    "pre_baked_context": "Daily volume: 12,000 packages. Single-hub option: hub in Chicago, $0.18/package handling cost, average 1.3-day delivery. Two-hub option: hubs in Chicago and Atlanta, $0.21/package handling cost (smaller scale), average 0.9-day delivery, but $40K/month fixed extra for the second facility. Customer value of one day saved: company estimates $0.07/package in retention. Compare on monthly net cost and on three-year NPV at 8% discount. State any assumptions explicitly.",
+    "notes": "Multi-step quantitative reasoning with explicit assumptions. Chained path: setup, calculation, sensitivity, recommendation."
+  },
+  {
+    "id": "eval_011",
+    "task_category": "translation",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "Translate product release notes from English to Brazilian Portuguese while preserving brand names, version numbers, and inline code identifiers verbatim.",
+    "pre_baked_context": "Source is markdown. Code spans (backticks) and code blocks must not be translated. Brand names: 'Snowdrift', 'Cascade', 'FlightDeck' — keep verbatim. Version strings like 'v2.3.1' verbatim. Target tone: professional but approachable, second person plural ('vocês') is fine. Preserve markdown structure exactly.",
+    "notes": "Translation with strict preserve-list and structural fidelity; one-shot."
+  },
+  {
+    "id": "eval_012",
+    "task_category": "multimodal",
+    "target_model_family": "gpt",
+    "expected_path": "one_shot",
+    "user_prompt": "Given a screenshot of a SaaS dashboard, identify the three most likely usability problems and propose a quick fix for each.",
+    "pre_baked_context": "Audience: a product designer with limited engineering time. Identify only issues that are visible in the screenshot — do not speculate about what's behind a click. For each issue, give: (1) what's wrong, (2) why it hurts users, (3) a concrete fix that would take less than a day of design + frontend work. Be specific to what's in the image; avoid generic UX platitudes.",
+    "notes": "Multimodal analysis; single coherent deliverable, one-shot."
+  },
+  {
+    "id": "eval_013",
+    "task_category": "code_generation",
+    "target_model_family": "gemini",
+    "expected_path": "chained",
+    "user_prompt": "Build a Python CLI that scans a directory of markdown files, extracts code blocks tagged with a language, runs each through the appropriate linter (ruff for python, eslint for javascript), and writes a single HTML report of all issues.",
+    "pre_baked_context": "Use argparse, not click. The CLI takes a root directory and an optional output path (default ./lint-report.html). Linters are assumed installed and on PATH. Skip code blocks with no language tag. Aggregate errors per file in the report, with collapsible sections per file. No network calls. Python 3.11.",
+    "notes": "Multi-component: file walk, code extraction, subprocess linting, HTML rendering. Chained candidate."
+  },
+  {
+    "id": "eval_014",
+    "task_category": "analysis",
+    "target_model_family": "gpt",
+    "expected_path": "one_shot",
+    "user_prompt": "Evaluate whether a small engineering team (5 people) should adopt monorepo tooling like Nx or stay with separate repos. Cover migration cost, day-to-day developer experience, and CI implications.",
+    "pre_baked_context": "Current state: 6 active repos, one shared internal library (vendored, not versioned). CI is GitHub Actions. Team ships one product. No mobile, no native code — all TypeScript and Python. The team complains about cross-repo PRs and out-of-sync versions of the shared library. Format: short brief, not a decision tree. End with a clear recommendation.",
+    "notes": "Bounded analysis with a recommendation; one-shot is fine."
+  },
+  {
+    "id": "eval_015",
+    "task_category": "agentic_workflow",
+    "target_model_family": "gpt",
+    "expected_path": "chained",
+    "user_prompt": "Design an end-to-end customer onboarding agent for a B2B SaaS product that schedules kickoffs, sends tailored documentation, monitors first-week activation milestones, and escalates to a human CSM when activation stalls.",
+    "pre_baked_context": "Tools available: calendar API (Google Calendar), email sending, product analytics API (read-only, supports filtering by customer_id and event_type), Slack webhook for CSM channel. Activation milestones: first user invite (day 2), first data import (day 4), first dashboard created (day 7). Escalation rule: any milestone late by 24h triggers a Slack ping AND a personalized check-in email. The agent must be idempotent; webhooks may fire twice.",
+    "notes": "Sequential agent design with state, idempotency, and escalation. Strong chained candidate."
+  },
+  {
+    "id": "eval_016",
+    "task_category": "summarization",
+    "target_model_family": "claude",
+    "expected_path": "one_shot",
+    "user_prompt": "Summarize a multi-page legal contract into a one-page plain-English brief for a non-lawyer executive, flagging unusual or risky clauses.",
+    "pre_baked_context": "Source: a vendor master services agreement, 8-12 pages. Brief structure: parties and term (2 lines), payment terms (2 lines), key obligations (3-5 bullets), risk flags (each with section reference). Risk flags include: indemnity caps, IP assignment, auto-renewal, exclusivity, liability that exceeds fees paid. Do not give legal advice; flag only.",
+    "notes": "Summarization with risk-spotting; one-shot."
+  },
+  {
+    "id": "eval_017",
+    "task_category": "reasoning",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "A startup is choosing between hiring a senior engineer at $220K or two mid-level engineers at $130K each. Reason through the trade-offs given a 12-month runway and a need to ship a v1 product.",
+    "pre_baked_context": "Team today: 2 engineers (one senior, one mid), 1 designer, 1 founder/PM. Product is an enterprise integration platform; the v1 must hit production-grade reliability for a launch customer. Cash runway is fixed; the founder will not raise more before launch. Output: a recommendation with the three strongest arguments for it, and the strongest counter-argument honestly stated.",
+    "notes": "Bounded reasoning problem with a clear deliverable shape; one-shot."
+  },
+  {
+    "id": "eval_018",
+    "task_category": "creative_writing",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "Write a three-act short film treatment (about 1500 words) about an aging chess grandmaster training an AI that will inevitably surpass them. Include scene-by-scene beats, character arcs, and a synopsis.",
+    "pre_baked_context": "Tone: melancholic but warm, like a Pixar short for adults. Setting: contemporary, single primary location (the grandmaster's apartment). Two main characters: the grandmaster, and a young ML researcher; the AI is present but not personified. End on bittersweet acceptance, not tragedy. Deliverables: synopsis (~150 words), act-by-act beat sheet, then prose treatment.",
+    "notes": "Multi-deliverable creative project benefits from chaining: synopsis, then structure, then prose."
+  }
+]
