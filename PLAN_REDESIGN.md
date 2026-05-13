@@ -51,17 +51,22 @@ Fixed three bugs:
 
 **2026-05-12 — Phase B1 complete (commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`)**
 
-Test backfill for original PLAN.md Phases 6–7. Test count: 145 → 179 (+34 tests). Zero bugs surfaced.
+Backfilled unit test coverage for code introduced in original PLAN.md Phases 6 (Critic + Live Testing) and 7 (Prompt Ingestion Loop). All Bedrock and vector-store calls remain mocked so the suite runs offline.
 
-Modules covered:
-- `orchestrator/live_test.py` (+7 tests: TestCleanGeneratedInput, TestFallbackTestInput, TestRunLiveTestFallback)
-- `agents/critic.parse_scores` (+3 tests: TestCriticParseScores covering JSON path, regex fallback, malformed JSON)
-- `orchestrator/agent_router.py` (+6 tests: TestAgentRouterHelpers covering resolve_target_model_id variants, fetch_reference_prompts fallback, run_critic_review wiring)
-- `orchestrator/orchestrator._split_final_draft` (+4 tests)
-- `orchestrator/orchestrator._parse_fewshot_examples` (+3 tests)
-- `orchestrator/orchestrator._ingest_accepted_prompt` (+2 tests)
-- `prompt_db/ingest.py` seed helpers (+6 tests: TestSeedNormalisation)
-- `prompt_db/admin.py` (+3 tests: TestAdminValidation)
+Stage 1 inventory (module → gap → tests added):
+
+- `orchestrator/live_test.py` → `_clean_generated_input`, `_fallback_test_input`, and the empty-generator-fallback branch of `run_live_test` were untested. **+7 tests** in `tests/test_live_test.py` (`TestCleanGeneratedInput`, `TestFallbackTestInput`, `TestRunLiveTestFallback`).
+- `agents/critic.parse_scores` → only the JSON happy path was exercised indirectly through orchestrator state tests; the regex fallback and missing-key defaults were untested. **+3 tests** in `tests/test_orchestrator.py::TestCriticParseScores`.
+- `orchestrator/agent_router.py` → `resolve_target_model_id`, `fetch_reference_prompts` (formatting + retrieval-error fallback), and `run_critic_review` (the end-to-end critic-with-references wiring introduced in Phase 6) had no direct tests. **+6 tests** in `tests/test_orchestrator.py::TestAgentRouterHelpers`.
+- `orchestrator/orchestrator._split_final_draft` → only one marker style was covered via `_build_prompt_record_from_session`; XML markers, the no-marker fallback, and empty input were untested. **+4 tests** in `tests/test_orchestrator.py::TestSplitFinalDraft`.
+- `orchestrator/orchestrator._parse_fewshot_examples` → multi-example parsing, empty input, and the "block without Input/Output" branch were untested. **+3 tests** in `tests/test_orchestrator.py::TestParseFewshotExamples`.
+- `orchestrator/orchestrator._ingest_accepted_prompt` → the swallow-on-failure contract relied on by `_handle_accepted` was untested. **+2 tests** in `tests/test_orchestrator.py::TestIngestAcceptedPrompt`.
+- `prompt_db/ingest.py` seed-normalisation helpers (`_normalise_target_model`, `_split_system_user`, `_seed_to_record`) → exercised indirectly via the seed-ingest integration test but with no unit-level assertions on mapping correctness. **+6 tests** in `tests/test_prompt_db.py::TestSeedNormalisation`.
+- `prompt_db/admin.py` → `update_score` bounds-check and the "ID not found" branches of `remove_prompt`/`update_score` were untested. **+3 tests** in `tests/test_prompt_db.py::TestAdminValidation`.
+
+Test count: 145 → **179** (added 34 tests). All tests pass.
+
+Bugs surfaced during Stage 3: **none**. The new tests confirmed existing Phase 6–7 behaviour rather than uncovering regressions.
 
 **2026-05-13 — Phase B2 complete (commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`)**
 
@@ -74,7 +79,27 @@ Artifacts:
 - `eval/README.md` (workflow docs)
 - Tests: B2 branch baseline was 145 → 155 (+10) because B2 branched before B1 landed. After branch consolidation in Phase B3 Stage 0, both sets will be present.
 
-**Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 will consolidate all three into a single long-lived `redesign/v2.1` branch and reconcile this file.
+**2026-05-13 — Phase B2 complete (commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`)**
+
+Built the eval harness and produced a v2 baseline run file.
+
+- New module: `eval/` containing `inputs.json` (18 curated prompts), `run_eval.py`, `rate.py`, `README.md`.
+- Eval set composition:
+  - 18 entries spanning all 11 task categories (code_generation ×3; analysis ×2; agentic_workflow ×2; creative_writing ×2; summarization ×2; reasoning ×2; data_transformation, classification, extraction, translation, multimodal ×1 each).
+  - Target families: claude ×7, gpt ×6, gemini ×5.
+  - Paths: one_shot ×11, chained ×7 (roughly 60/40; close to the 50/50 target).
+- New test file `tests/test_eval_harness.py` adds 10 tests (per-entry capture, file-update logic, rating-scale validation). Test count: 145 → 155 on the B2 branch baseline (the branch was cut before B1 landed). After Phase B3 Stage 0 consolidates B1 + B2 into `redesign/v2.1`, the combined suite is 145 + 34 (B1) + 10 (B2) = 189 tests.
+- Baseline run file: `eval/runs/2026-05-13_4201783_v2-baseline.json`. Captured the full 18-entry schema with rating blocks null.
+
+**Orchestrator quirks discovered driving it programmatically:**
+
+1. The orchestrator's `_handle_initial` / `_handle_awaiting_context` are tightly coupled to the response merger and the Lambda response shape. The runner deliberately reproduces the agent-call sequence (architect draft → refine + few-shot in parallel → critic) directly via `agent_router`, rather than invoking the state-machine handlers. That decoupling means future state-machine changes (Phase D's Decomposer in particular) will need a corresponding runner update.
+2. `agent_router.invoke_agent` strips the usage metadata that `invoke_agent_raw` returns. Token counting required monkey-patching `invoke_agent_raw` for the run's duration.
+3. The keyword-based `classify_task` in `agent_router.py` only knows 6 buckets (data_analysis, code_generation, writing, creative, web_development, research, general) — it cannot produce the 11 canonical categories used in `seed_prompts.json` or in this eval set. Eval `task_category` is therefore metadata for human use; the orchestrator classifies independently. Phase C/D should reconcile this.
+4. `fetch_reference_prompts` and `fetch_fewshot_examples` are called eagerly and silently swallow exceptions, but the prompt_db S3 fetch happens before that catch in some code paths and raises `NoCredentialsError` up the stack. The runner treats this as a per-entry skip, not a hard failure.
+5. **Sandbox limitation:** the environment where Phase B2 was executed has no AWS credentials. As a result, the committed baseline run file has all 18 entries marked `skipped: NoCredentialsError`. The runner shape and the inputs are correct; the user must re-run `python eval/run_eval.py --label v2-baseline` on a credentialed machine to produce the real baseline numbers before rating. Until then the v2 baseline is a placeholder.
+
+**Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 consolidated all three into a single long-lived `redesign/v2.1` branch and reconciled this file.
 
 ---
 
