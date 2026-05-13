@@ -24,7 +24,7 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase A.** Bug fixes (#1, #8, #9) — completed 2026-05-12, commit `7314966`
 - [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`
 - [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. **Baseline capture deferred to post-B3** (AWS credentials gap in Claude Code sandbox).
-- [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`).
+- [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`).
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -101,7 +101,7 @@ Built the eval harness and produced a v2 baseline run file.
 
 **Branch divergence note:** Phases A, B1, B2 each landed on separate branches. Phase B3 Stage 0 consolidated all three into a single long-lived `redesign/v2.1` branch and reconciled this file.
 
-**2026-05-13 — Phase B3 complete (branch `claude/migrate-anthropic-api-AYZnc`, branched from `redesign/v2.1`)**
+**2026-05-13 — Phase B3 complete (commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc`, branched from `redesign/v2.1`)**
 
 Migrated all agent generation calls from AWS Bedrock to the Anthropic API directly and bumped the default agent model to Claude Haiku 4.5.
 
