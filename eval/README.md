@@ -28,13 +28,13 @@ LLM-as-judge scoring, downstream verification (does the generated code actually 
 python eval/run_eval.py
 ```
 
-This produces `eval/runs/<YYYY-MM-DD>_<short_sha>_<branch>.json`. The runner requires AWS credentials configured for Bedrock in `us-east-1` (same configuration the deployed Lambda uses). Useful flags:
+This produces `eval/runs/<YYYY-MM-DD>_<short_sha>_<branch>.json`. The runner requires `ANTHROPIC_API_KEY` to be set in the shell (Phase B3 migrated agents off Bedrock). AWS credentials are still needed to hit the prompt DB on S3 and DynamoDB for session state, but agent calls themselves no longer require Bedrock access. Useful flags:
 
 - `--label v2-baseline` — override the branch suffix on the output filename.
 - `--limit N` — only run the first N entries (smoke test).
-- `--dry-run` — stub all Bedrock calls with deterministic placeholders. Use only for shape-checking the harness itself; the output is not a real measurement.
+- `--dry-run` — stub all Anthropic calls with deterministic placeholders. Use only for shape-checking the harness itself; the output is not a real measurement.
 
-Entries are processed one at a time. If an entry cannot be captured (missing `pre_baked_context`, an unknown model family, a Bedrock failure, etc.) the runner logs it, marks it skipped in the output file, and moves on. The run never fails as a whole.
+Entries are processed one at a time. If an entry cannot be captured (missing `pre_baked_context`, an unknown model family, an Anthropic API failure, etc.) the runner logs it, marks it skipped in the output file, and moves on. The run never fails as a whole.
 
 ## Rate outputs
 
@@ -97,9 +97,9 @@ A proper comparison tool (delta tables, regression flags, statistical significan
 
 ## Cost expectation per run
 
-Per entry the pipeline issues roughly six Bedrock calls (Architect draft, Context Scout, Clarifier, Architect refine, Few-Shot Generator, Critic) at ~2k–4k total tokens each. Using Claude 3.5 Haiku as the default agent model (current production setting, $0.80 / M input, $4.00 / M output):
+Per entry the pipeline issues roughly six Anthropic API calls (Architect draft, Context Scout, Clarifier, Architect refine, Few-Shot Generator, Critic) at ~2k–4k total tokens each. After Phase B3, the default agent model is **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) at $1 / M input, $5 / M output (Anthropic API list pricing as of 2026-05):
 
-- ~15k input + ~10k output tokens per entry ≈ **$0.05** per entry.
-- 18-entry set ≈ **$0.90** per full run.
+- ~15k input + ~10k output tokens per entry ≈ **$0.065** per entry.
+- 18-entry set ≈ **$1.20** per full run on Haiku 4.5.
 
-The cost roughly doubles if `POGO_TARGET_MODEL_ID_*` is set to Sonnet or higher for any family, since the live test step uses the target model. The runner does not currently fire the live-test path, so target-family cost is only paid via the Critic when reference retrieval is heavy. Budget $1–$2 per full run with default settings; expect this to grow when the Decomposer arrives in Phase D.
+If `POGO_TARGET_MODEL_ID_*` is set to Sonnet 4.6 (`claude-sonnet-4-6`, $3 / M input, $15 / M output) for any family, the live test step uses that model and per-entry cost rises to ~$0.20. The runner does not currently fire the live-test path, so target-family cost is only paid via the Critic when reference retrieval is heavy. Budget **$1.50–$3** per full run with default settings; expect this to grow when the Decomposer arrives in Phase D and per-phase tier mapping starts routing higher-stakes phases to Sonnet 4.6.
