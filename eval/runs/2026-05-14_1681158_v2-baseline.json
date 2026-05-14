@@ -32,9 +32,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 1,
+        "notes": "Architect output missing entirely. Final output is only a curl command + Few-Shot examples with no role/task/constraints. Same prompt produced a complete output in smoke test 1hr earlier (critic 0.70 vs 0.10 here). See Bug #12. Four independent evaluators confirmed 1/5.",
+        "rated_at": "2026-05-14T20:07:56.691399+00:00"
       }
     },
     {
@@ -61,9 +61,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Good role/task/requirements skeleton but two fatal issues: (1) Few-Shot examples are Python sum_even_numbers in a TypeScript task — wrong language AND wrong domain, (2) Output Format section truncated with empty Function Signature placeholder, (3) user's \"include unit tests\" requirement dropped entirely. See pattern note below.",
+        "rated_at": "2026-05-14T20:10:32.377200+00:00"
       }
     },
     {
@@ -90,9 +90,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 3,
+        "notes": "Strong role/task/constraints/output-format scaffold (would be 4-5 without structural issues). Three defects: (1) nested <examples> tags from Few-Shot Generator appending instead of integrating with Architect's examples, (2) Example 2 truncated mid-sentence (likely token limit), (3) two conflicting example formats side by side. Evaluator split: 3/4/5 across reviewers. Scored 3 because structural issues require manual cleanup. Pattern: Few-Shot Generator continues to be the failure point across all three entries so far. First review's suggestion of a deterministic lint step (XML validation, truncation detection, empty-section detection) before Critic scoring is worth adding to Phase E scope.",
+        "rated_at": "2026-05-14T20:14:02.254672+00:00"
       }
     },
     {
@@ -119,9 +119,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 4,
+        "notes": "First genuinely good output across eval_001-004. Few-Shot Generator integrated cleanly — examples are on-task (GitHub PR reviews), format-consistent, and escalate in complexity. Two minor issues: (1) format inconsistency between output_format (bold emoji headers) and examples (h3 markdown headers), (2) contradiction between \"do not post incomplete reviews\" and \"post abbreviated review on timeout.\" Critic 0.90 is slightly generous (missed the format mismatch it praised as \"exactly matching\"). Hypothesis: Few-Shot works when user prompt pre-specifies structure, fails on free-form tasks where Architect invents its own example block. Test this across remaining entries.",
+        "rated_at": "2026-05-14T20:16:04.112537+00:00"
       }
     },
     {
@@ -148,9 +148,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 3,
+        "notes": "Excellent scaffold (constraints section is strongest across all evals so far — specific anti-cliché list, show-don't-tell guidance, image-based ending). Four issues prevent higher score: (1) CoT leakage — \"Techniques Used\" and \"Changes Made\" sections are POGO's internal reasoning leaked into user-facing output (Bug #10), (2) Example 3 truncated mid-sentence (second occurrence after eval_003 — likely max_tokens exhaustion), (3) Config block uses GPT-style syntax (\"Thinking level: medium\", \"Temperature: 0.7\") in a Gemini-targeted prompt, (4) examples are third-person past tense while prompt requires first-person present tense — direct internal contradiction. Critic scored 0.90, missed all four issues. Gemini rated 4/5, also missed the POV/tense contradiction. Pattern: truncation now 2 of 5 entries; CoT leakage now confirmed in final output not just UI panels.",
+        "rated_at": "2026-05-14T20:18:15.594993+00:00"
       }
     },
     {
@@ -177,9 +177,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 1,
+        "notes": "Same failure as eval_001: Architect output missing, only Few-Shot examples reached final assembly. No role, task, context, constraints, or output format. Additional issue: examples don't demonstrate the actual task — show pre-aggregated customer data being reformatted as JSON, not the line-item-to-summary aggregation the user asked for. Schema and examples describe two different tasks. Fastest/cheapest run in the baseline (27.4s, 8536 tokens) — correlates with Architect silent failure hypothesis. Bug #12 recurrence. Investigate orchestrator logs for whether Architect was invoked and what it returned.",
+        "rated_at": "2026-05-14T20:20:02.171624+00:00"
       }
     },
     {
@@ -206,9 +206,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "New failure mode: Few-Shot examples are on-topic but contradict the Architect's declared schema. Invented urgency tier (\"Medium-High\") outside the defined {Critical, High, Medium, Low} set. Invented department labels outside the enumerated six. Confidence scale (0.0-1.0) defined in rubric but absent from all examples. Output format promised as JSON but examples use markdown bold key-value pairs. Critic scored 0.90 — largest disagreement yet, failed to cross-check examples against schema. User's original routing categories (billing/technical/account/other) also drifted to a different taxonomy. Bug #11 variant: Few-Shot Generator not parsing Architect's enumerated values before generating examples.",
+        "rated_at": "2026-05-14T20:22:07.944864+00:00"
       }
     },
     {
@@ -235,9 +235,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Third Architect-missing failure (Mode A, also eval_001 and eval_006). No role, task, context, constraints, or instructions. Schema uses start_iso/end_iso but examples use start/end — field name contradiction (Mode C overlap). Examples introduce undeclared fields (time_zone, confidence, warnings). No relative-date resolution rules despite that being the core task. Example 3 has factual timezone conversion error (PST→ET claim doesn't match output). Critic 0.50 is too generous. Pattern: Mode A is now most common failure at 3/8 (38%).",
+        "rated_at": "2026-05-14T20:23:57.110261+00:00"
       }
     },
     {
@@ -264,9 +264,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Fourth Mode A failure (Architect missing — also eval_001, 006, 008). No role, task, context, constraints, or instructions. No input placeholder for the actual post-mortem document. Mode C overlap: template declares Blast Radius/What Changed fields that examples don't use; examples introduce Follow-ups field not in template. Despite structural failures, the three examples are the highest-quality across all evals — genuinely demonstrate dual-audience tone calibration. However, examples hallucinate unsupported details (revenue percentages, transaction counts) not present in their inputs, which is a grounding failure for a summarization task. Critic 0.80 missed all structural issues. POGO added no value over \"just show a model some examples\" — below baseline for a prompt optimization tool. Mode A now 4 of 9 (44%).",
+        "rated_at": "2026-05-14T20:26:09.137093+00:00"
       }
     },
     {
@@ -293,9 +293,9 @@
         }
       },
       "rating": {
-        "score": null,
+        "score": 2,
         "notes": null,
-        "rated_at": null
+        "rated_at": "2026-05-14T20:34:42.325391+00:00"
       }
     },
     {
@@ -322,9 +322,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Good translation scaffold ({{SOURCE_MARKDOWN}} placeholder, clean examples, useful constraints) undermined by: two full meta-commentary sections leaked (Techniques Used + Changes from Draft — Bug #10), three hallucinated brand names presented as binding rules not examples (Bug #13/Mode F), \"# Prompt:\" preamble, code-comment contradiction (preserve code exactly vs translate comments), and few-shot section mislabeled as \"Code Generation\" for a translation task. Critic 0.90. Modes D+F+G.",
+        "rated_at": "2026-05-14T20:54:54.816500+00:00"
       }
     },
     {
@@ -351,9 +351,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Good scaffold (role, constraints including \"visible screenshot only\" and \"no redesigns\") but missing JSON schema (promised, never delivered — same as eval_007) and all three examples are wrong-task (text analysis, not multimodal screenshot analysis). Examples actively violate the \"visible only\" constraint by citing backend metrics, user counts, and dollar impacts. Field schema mismatch between body (what's wrong/why/fix) and examples (problem_title/affected_users/severity). Modes B+C co-occurring. Critic 0.70. Clean rate now 1 of 12.",
+        "rated_at": "2026-05-14T20:57:18.445627+00:00"
       }
     },
     {
@@ -380,9 +380,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 1,
+        "notes": "Architect output reduced to a single CLI line. Few-Shot Generator broke character (Mode H — new): produced a clarification request asking for the full prompt instead of generating examples. Orchestrator shipped both as final output. Critic 0.10, unanimous 1/5. Claude's hypothesis: Architect was building an ASCII directory tree that got truncated, only the trailing CLI invocation survived. Mode A + H.",
+        "rated_at": "2026-05-14T20:59:26.352665+00:00"
       }
     },
     {
@@ -409,9 +409,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Hallucinated context (Mode F: invented 6 repos, TypeScript/Python, GitHub Actions, vendored library — none from user). Output Format contains pre-filled answer instead of template (biases model toward regurgitation). Meta-commentary leak (Mode G: Techniques Used section, truncated). Double truncation (Techniques Used + Example 2). Chat caught: prompt reframes user's three dimensions (migration cost/DX/CI) into two different dimensions, and biases toward adoption. Critic 0.80. CRITICAL: Claude hypothesizes meta-commentary leak feeds back into Critic scoring — Critic's techniques_identified array mirrors POGO's own Techniques Used section nearly verbatim. Check Critic input payload for contamination.",
+        "rated_at": "2026-05-14T21:06:47.216035+00:00"
       }
     },
     {
@@ -438,9 +438,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 3,
+        "notes": "Strong operational scaffold (state machine framing, idempotency, API contracts, template placeholders). Double truncation (JSON schema mid-object + Example 2 mid-sentence). Mode C: examples use different milestones than the \"Fixed\" table declared in body. Mode F borderline: invented specific milestones/APIs/business hours. Task drift: user asked to \"design an agent\" but output asks model to produce a customer-specific execution plan. Critic 0.70. Gemini reviewed wrong entry (disregarded).",
+        "rated_at": "2026-05-14T21:27:03.135321+00:00"
       }
     },
     {
@@ -467,9 +467,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 4,
+        "notes": "Second-best output after eval_004. Strong anti-hallucination guards, correct placeholder usage, consistent examples (no Mode C), no meta-commentary leak (no Mode G), no fabricated context (no Mode F). Only Mode D: Example 2 truncated mid-sentence + output_format incomplete (\"Begin with:\" then nothing) + unclosed XML tags. Fixing truncation alone would make this a 5. Critic 0.90.",
+        "rated_at": "2026-05-14T21:29:50.393780+00:00"
       }
     },
     {
@@ -496,9 +496,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 2,
+        "notes": "Fifth Mode A (Architect fragment — floating output template with no role/task/constraints). Mode C: template uses 4-section structure (arguments/counter/flip condition) but examples use completely different 8-section 5-dimension framework — zero overlap in section names. User's specific parameters ($220K/$130K/12-month runway) never referenced. Example 2 truncated. Examples invent unsupported metrics (\"200 hours of rework,\" \"10-15% scope creep\"). Critic 0.40 — closest to evaluator consensus all run.",
+        "rated_at": "2026-05-14T21:36:24.212693+00:00"
       }
     },
     {
@@ -525,9 +525,9 @@
         }
       },
       "rating": {
-        "score": null,
-        "notes": null,
-        "rated_at": null
+        "score": 3,
+        "notes": "Best creative-writing scaffold in the run (anti-cliché list, \"Pixar short for adults\" tonal ref, bittersweet-acceptance target). Multiple structural failures: truncation (Example 2 never written, character arcs cut mid-sentence), meta-commentary leak (Techniques Used — truncated at item 5), Mode H (agent narrates \"GENERATING FEW-SHOT EXAMPLES\"), preamble leak. Mode C: example contradicts constraints (multiple locations vs single apartment, AI named KASTOR vs non-character). Critic 0.90. Modes D+G+H+C.",
+        "rated_at": "2026-05-14T21:42:56.175860+00:00"
       }
     }
   ]
