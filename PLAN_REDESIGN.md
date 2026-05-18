@@ -25,7 +25,9 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`
 - [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. Baseline capture deferred to post-B3 (AWS credentials gap in Claude Code sandbox).
 - [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`). Smoke test ran 2026-05-14 (commit `391a012`). Full v2 baseline captured and rated 2026-05-14 (commit `1681158`).
-- [ ] **Phase B4.** Baseline Restoration — prompt DB seeding, fix bugs #10–14, Critic decontamination + calibration test, B3 closure verification, re-baseline. **Next to draft.**
+- [x] **Phase B4A.** Baseline Restoration Part 1 — prompt DB seeded (139 records), spot re-baseline of 3 evals (eval_001, eval_007, eval_011) captured. Critic regression detected with seeded references; "seeding helps quality" hypothesis refuted. Completed 2026-05-18, commit `f5b323a`, branch `redesign/v2.1`.
+- [ ] **Phase B4B.** Critic decontamination + bug fixes (#10, #11, #12, #13, #16) — priority reordered after B4A. Critic is the central work; bug fixes secondary. **Next to draft.**
+- [ ] **Phase B4C.** Full re-baseline against fixed Critic + agent fixes; Critic calibration test (5 known-good + 5 known-bad); auto-ingest gate hardening.
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -151,6 +153,43 @@ The Critic's bias has a specific shape, not uniform generosity. It agrees with h
 
 Bugs surfaced or sharpened by the rating pass: bugs #11, #12, #13 (already known from smoke test), plus the new Critic miscalibration finding (logged as bug #14). Details in the Known Issues section below.
 
+**2026-05-18 — Phase B4A complete (commit `f5b323a`, branch `redesign/v2.1`)**
+
+Spot re-baseline against seeded prompt DB. Three eval entries (eval_001, eval_007, eval_011) re-captured to test whether seeding alone improves quality. Result: the hypothesis is refuted, and the Critic appears to have regressed in calibration.
+
+Seeding outcome:
+- 139 records ingested cleanly from `seed_prompts.json` into `s3://pogo-knowledge-base/prompt_db/`. Files written: `prompts.json` (158,486 bytes), `embeddings.npy` (142,464 bytes; 256-dim Titan v2 ≈ 139 × 256 × 4).
+- Source seed has the 11-category taxonomy. Ingest normalises to 6 categories (`code_generation`, `data_analysis`, `creative`, `research`, `writing`, `general`) to align with `agent_router.classify_task`'s 6-bucket output. Documented as intentional; flagged earlier in Phase B2 changelog under "Phase C/D should reconcile."
+
+Retrieval verification:
+- `retrieve_reference_prompts('code_generation', 'claude', k=3)` returns 3 records (`claude_024`, `claude_002`, `claude_040`). Critic now has reference anchors. **Working.**
+- `retrieve_few_shot_examples('code_generation', 'claude', k=3)` returns 0. The retriever filters to records with non-empty `few_shot_examples`; all 139 seed records have an empty `few_shot_examples` field (verified both in source and post-ingest). Few-Shot Generator continues to run on hardcoded fallback templates regardless of seeding. **Logged as Bug #15.**
+
+New bug found in eval_007's capture: Architect output begins with the preamble "I'll refine the prompt based on the new requirements. Here's an updated version:" before any structured sections. Same shape as Bugs #8 (Clarifier), #9 (Context Scout), #10 (Few-Shot). **Logged as Bug #16.**
+
+Critic-score deltas (B4A capture vs 2026-05-14 baseline):
+
+| Eval | Baseline critic | B4A critic | Δ | Structural inspection |
+|---|---|---|---|---|
+| eval_001 | 0.10 | 0.60 | +0.50 | Missing `<role>`, `<context>`, `<task>`, `<constraints>`. Only `<examples>` present, containing Bug #10 CoT leak and Bug #13 hallucinated schema. |
+| eval_007 | 0.90 | 0.90 | 0.00 | All six sections present, but Architect CoT preamble at top (Bug #16). |
+| eval_011 | 0.90 | 0.80 | -0.10 | All six sections MISSING. Output is markdown skeleton + Bug #10 leak (`## examples\n\nI'll generate few-shot examples…`). |
+
+Mean Critic score across the three: 0.63 → 0.77 (+0.14). Structural quality on visual inspection: flat or worse than baseline. **Strong signal that the Critic with seeded references is more lenient on broken output, not better calibrated.** Presence of any `<...>` markers or vaguely-formatted content appears to read as quality. Sample size is three; treat as suggestive, not proven.
+
+Implication for the auto-ingest flywheel: turning on ingestion with the current Critic + seeded references would more reliably poison the DB than the unseeded state would. Auto-ingest must stay disabled until B4B fixes the Critic.
+
+Human ratings for the spot-check captures: **PENDING** (to be filled in after rating against the 2026-05-14 originals).
+
+Capture file: `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`
+
+**Updated B4B priority ordering (informed by B4A findings):**
+
+1. Critic decontamination becomes the central work, not a side fix. Concrete moves: strip `techniques_identified` framing from the system prompt; add explicit penalties for missing core sections (`<role>`/`<context>`/`<task>`/`<constraints>`); add input-hygiene section flagging leaked CoT and "Techniques Used:" blocks as defects; consider disabling reference prompts in Critic calls until decontamination lands; add calibration test (5 known-good + 5 known-bad outputs through the Critic with distribution-separation acceptance criteria).
+2. Bug fixes #10, #11, #12, #13, #16. Defense-in-depth fixes (`_strip_preamble` coverage + STRICT OUTPUT RULES) probably cover #10 and #16 cleanly. #12 needs investigation of `_split_final_draft`. #13 likely needs a Few-Shot system prompt rewrite to enforce placeholders rather than fabricating values.
+3. Auto-ingest gate hardening: `critic_score >= 0.8` alone is unsafe. Add structural lint (all four core sections present, no leaked CoT markers, no obviously fabricated user data) as a second gate.
+4. Bug #15 (populate `few_shot_examples` for the 139 seed records) deferred to Phase E. Substantial separate work; not on B4B's critical path.
+
 ---
 
 ## Known Issues (to address in Phase B4)
@@ -185,14 +224,29 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Symptom:* Critic gives 0.7–0.9 scores to outputs humans rate 2/5.
 - *Shape (from baseline rating):* agreement on the extremes (worst and best outputs), miscalibration in the middle. When output has any structure at all (including leaked CoT or self-contradictory examples), the Critic rates 0.7+.
 - *Concrete cost:* 5 of 18 baseline entries (28%) cross the 0.8 auto-ingest threshold while humans rate them ≤ 2. Seeding the DB and enabling auto-ingest before fixing this would poison the DB.
-- *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage.
+- *Update from B4A (2026-05-18):* adding seeded reference prompts to the Critic call made calibration **worse**, not better. Three-capture spot check showed mean Critic score moving from 0.63 to 0.77 while structural quality stayed flat or regressed. The Critic with references over-anchors on superficial structural cues. Mitigation in B4B will likely require either rewriting the Critic system prompt OR temporarily disabling reference prompts in Critic calls until decontamination lands.
+- *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage. Reference prompts compound the bias by adding more surface to anchor on.
 - *Severity:* critical for the auto-ingest flywheel.
 
-**Operational gap — Prompt DB never seeded.**
-- *Symptom:* `bash scripts/seed_prompt_db.sh` has never been run.
-- *Effect:* The Few-Shot Generator runs on hardcoded fallback templates rather than the 139 seeded exemplars. The Critic's `reference_prompts` field is empty, removing the comparison anchor it was designed to use. RAG retrieval returns nothing.
-- *Implication:* the entire v2 baseline (mean 2.28) was measured on a degraded fallback path, not the architecture as designed. Some fraction of the failure modes above may resolve once the DB is seeded.
-- *Fix:* run the seed script. First step of Phase B4.
+**Bug #15 — Few-Shot Generator retrieval blocked by empty `few_shot_examples` field in seed data.**
+- *Symptom:* `retrieve_few_shot_examples` filters to records where `few_shot_examples` is non-empty. All 139 seed records have an empty `few_shot_examples` field both in source `seed_prompts.json` and in `s3://pogo-knowledge-base/prompt_db/prompts.json` (verified during B4A on 2026-05-18). Retrieval always returns 0.
+- *Effect:* Few-Shot Generator falls back to its hardcoded template path regardless of whether the DB is seeded. Seeding does not improve the Few-Shot side of the pipeline.
+- *Implication for Bug #13:* the "hallucinate user-specific data" symptom is not caused by an unseeded DB. Root cause is in the Few-Shot Generator system prompt itself — likely insufficient instruction to emit placeholders rather than fabricate concrete values. Address in the Few-Shot system prompt during Phase B4B, not via data fixes.
+- *Possible fixes:* (a) populate `few_shot_examples` for each seed record (manual or semi-automated; substantial work, probably a Phase E task), (b) modify the retriever to synthesize example pairs from `user_prompt_template` plus a hypothetical output, or (c) repurpose `retrieve_reference_prompts` output as few-shot context.
+- *Severity:* high. Invalidates one of B4A's premises. Defer the deep fix (populating `few_shot_examples`) to Phase E; in B4B, decide whether to apply (b) or (c) as an interim measure.
+
+**Bug #16 — Architect CoT preamble leak.**
+- *Symptom:* Architect output begins with chain-of-thought meta-commentary (e.g., "I'll refine the prompt based on the new requirements. Here's an updated version:") before the structured `<role>`/`<context>`/etc. sections.
+- *Same shape as bugs #8 (Clarifier), #9 (Context Scout), #10 (Few-Shot).* The Architect was not covered by Phase A's `_strip_preamble` helper.
+- *Visible in:* `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`, eval_007 first 200 chars.
+- *Fix direction:* extend `_strip_preamble` coverage in `orchestrator/response_merger.py` to Architect output, and add a STRICT OUTPUT RULES section to the Architect system prompt forbidding preamble (same template as Phase A used for Clarifier and Context Scout).
+- *Severity:* high. Contributes to Critic miscalibration since the preamble reads as "content" rather than a defect, and is visible in user-facing output.
+
+**Operational gap — Prompt DB never seeded.** *Partially resolved 2026-05-18 (B4A).*
+- *Status:* DB seeded with 139 records on 2026-05-18. `retrieve_reference_prompts` confirmed working. `retrieve_few_shot_examples` confirmed broken at the data level (see Bug #15).
+- *Effect on Few-Shot Generator:* unchanged. Still runs on hardcoded fallback templates. Real fix tracked in Bug #15.
+- *Effect on Critic:* references now load, but B4A surfaced that adding them made calibration worse (see Bug #14 update). May need to be disabled until Critic is decontaminated.
+- *Implication:* the v2 baseline (mean 2.28) was not just measuring "system in degraded fallback mode"; the system has deeper issues that seeding alone does not address.
 
 **Eval harness vs. UI parity (verification needed).**
 - *Question:* Do the eval harness captures match what `pogo.html` renders in the live UI?
