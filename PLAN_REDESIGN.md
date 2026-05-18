@@ -195,6 +195,13 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Possible fixes:* (a) populate `few_shot_examples` for each seed record (manual or semi-automated — substantial work, probably a Phase E task), (b) modify the retriever to synthesize example pairs from `user_prompt_template` plus a hypothetical output, or (c) repurpose `retrieve_reference_prompts` output as few-shot context.
 - *Severity:* high. Invalidates one of B4A's premises.
 
+**Bug #16 — Architect CoT preamble leak.**
+- *Symptom:* Architect output begins with chain-of-thought meta-commentary (e.g., "I'll refine the prompt based on the new requirements. Here's an updated version:") before the structured `<role>`/`<context>`/etc. sections.
+- *Same shape as bugs #8 (Clarifier), #9 (Context Scout), #10 (Few-Shot).* The Architect was not covered by Phase A's `_strip_preamble` helper.
+- *Visible in:* `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`, eval_007 first 200 chars.
+- *Fix direction:* extend `_strip_preamble` coverage in `orchestrator/response_merger.py` to Architect output, and add a STRICT OUTPUT RULES section to the Architect system prompt forbidding preamble.
+- *Severity:* high — contributes to Critic miscalibration since the preamble reads as "content" rather than a defect.
+
 **Operational gap — Prompt DB never seeded.**
 - *Symptom:* `bash scripts/seed_prompt_db.sh` has never been run.
 - *Effect:* The Few-Shot Generator runs on hardcoded fallback templates rather than the 139 seeded exemplars. The Critic's `reference_prompts` field is empty, removing the comparison anchor it was designed to use. RAG retrieval returns nothing.
