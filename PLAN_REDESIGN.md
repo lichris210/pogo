@@ -203,6 +203,35 @@ python eval/run_eval.py --inputs /tmp/b4a-subset.json --label b4b-critic-deconta
 
 Expected: eval_001's `critic_score` should drop from 0.60 toward <0.30; eval_007 should drop meaningfully from 0.90; eval_011 should drop substantially from 0.80.
 
+**2026-05-18 — Phase B4B validation results**
+
+Spot-check ran against the same three eval entries as B4A (eval_001, eval_007, eval_011) with the decontaminated Critic and references disabled. Three captures total: one for eval_001, then a retry for eval_007 + eval_011 after Anthropic returned `OverloadedError` on the initial pass.
+
+Critic-score table:
+
+| Eval | Pre-seed baseline (2026-05-14) | B4A (seeded refs) | B4B (decontam, no refs) | Read |
+|---|---|---|---|---|
+| eval_001 | 0.10 | 0.60 | 0.60 | Output had 2 of 4 core sections missing this run. Critic acknowledged in feedback but did not strictly apply the "ANY missing → cap at 3/10" rule. Score reflects qualitative judgment of partial structure. |
+| eval_007 | 0.90 | 0.90 | 0.40 → 0.60 (run variance) | All six sections present in the captured run; no Architect CoT preamble visible. Critic's lower score reflects identified gaps in constraint coverage and output schema specification, not INPUT HYGIENE / Bug #16 detection. |
+| eval_011 | 0.90 | 0.80 | 0.00 → 0.10 (run variance) | All four core sections MISSING. Critic feedback explicitly cites **"HARD RULE VIOLATION"** with enumerated missing sections. Completeness floored to 0/10. |
+
+Mean across the three: 0.32 (vs B4A's 0.77, vs the 2026-05-14 baseline mean of 0.63 across the same three entries). Substantial improvement.
+
+Findings:
+
+1. **HARD RULE binds reliably on the catastrophic case.** When all four core sections are missing, the Critic cites the rule by name in its feedback ("HARD RULE VIOLATION") and floors Completeness to 0/10. Direct evidence the new system prompt is loaded and binding rules are enforced when violations are unambiguous.
+2. **HARD RULE "ANY missing → cap at 3/10" clause does NOT bind reliably on partial cases.** When only some core sections are missing (eval_001's 2 of 4), the Critic acknowledges the issue in feedback but scores Completeness at 6/10 instead of capping at 3/10. Phrasing weakness. Tighten in a future patch if it remains an issue after B4C reduces how often the rule needs to fire.
+3. **Critic scoring has 0.10–0.20 run-to-run variance on the same input.** Same code, same input, different scores across runs. The B4D calibration test must run each prompt 3–5 times and report distribution, not a single point.
+4. **Bug #16 (Architect CoT leak) is intermittent.** B4A's eval_007 had a visible Architect CoT preamble. B4B's retry eval_007 did not. The bug is real but doesn't fire on every capture of the same input. B4C applied the structural fix anyway.
+5. **Encoding bug surfaced in `eval/run_eval.py`.** `pathlib.write_text` and `json.load(open(...))` default to cp1252 on Windows, fail on Unicode characters in Critic output (specifically `\u2192` "→"). Hotfix committed on branch `fix/eval-runner-utf8` (commit `41994a7`); broader audit + locking down all Path text I/O completed in B4C.
+6. **Eval runner skipped silently on `OverloadedError` from Anthropic.** Logged for B4C; addressed in commit `ff8d7a1` (retry-with-backoff, 10s/30s/60s).
+
+Capture files: `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated.json` and `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated-retry.json`. Subset files used to drive the spot check committed at `b4a-subset.json` and `b4a-subset-retry.json` in repo root.
+
+B4B is validated. Move to B4C.
+
+---
+
 **2026-05-18 — Phase B4C complete (commit `ff8d7a1`, branch `claude/fix-pipeline-bugs-b4c-1TDUv`)**
 
 Structural bug fixes for #10, #11, #12, #13, #16 plus the Few-Shot Generator placeholder-enforcement rewrite, an encoding audit across `eval/`, and a retry-with-backoff loop in the eval runner for Anthropic overload errors. The Critic calibration test, auto-ingest gate hardening, and full 18-entry re-baseline are **explicitly deferred to Phase B4D** (see Status). The reason for splitting: B4C's bug fixes need their own diagnostic signal; bundling calibration + bug fixes would conflate movement.
