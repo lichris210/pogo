@@ -173,7 +173,7 @@ Spot-check captures of three eval entries (eval_001, eval_007, eval_011) after s
 
 **Decision:** Split Phase B4 into A/B/C. B4B addresses the Critic decontamination in isolation (system-prompt rewrite + reference disable feature flag), B4C handles the bug fixes (#10–13, #16) plus the Few-Shot system prompt rewrite. Sequencing prevents conflating the Critic signal with the bug-fix signal.
 
-**2026-05-18 — Phase B4B complete (commit `<FILL_IN>`, branch `claude/phase-b4b-decontamination-khFef`)**
+**2026-05-18 — Phase B4B complete (commit `950a022`, branch `claude/phase-b4b-decontamination-khFef`)**
 
 Critic decontamination + reference disable, the Bug #14 mitigation flagged by B4A.
 
@@ -238,7 +238,7 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Concrete cost:* 5 of 18 baseline entries (28%) cross the 0.8 auto-ingest threshold while humans rate them ≤ 2. Seeding the DB and enabling auto-ingest before fixing this would poison the DB.
 - *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage.
 - *B4A update (2026-05-18):* Seeding the DB and exposing reference prompts to the Critic made calibration **worse**, not better. Spot-check captures of eval_001 / eval_007 / eval_011 each scored higher with seeded references (deltas +0.50 / +0.20 / +0.70) despite the underlying outputs remaining structurally broken. The Critic over-anchors on superficial structural cues from the references rather than penalizing defects.
-- *B4B mitigation landed (commit `<FILL_IN>`):* `techniques_identified` removed from system prompt; `=== INPUT HYGIENE ===` section added enumerating pipeline-leakage defects; HARD RULE added capping Completeness at 3/10 when required sections are missing; evidence-framing line rewritten to prioritize defects over compensating positives; reference prompts disabled via `ENABLE_CRITIC_REFERENCES = False` feature flag in `orchestrator/agent_router.py`. Awaiting spot-check validation against `/tmp/b4a-subset.json`.
+- *B4B mitigation landed (commit `950a022`):* `techniques_identified` removed from system prompt; `=== INPUT HYGIENE ===` section added enumerating pipeline-leakage defects; HARD RULE added capping Completeness at 3/10 when required sections are missing; evidence-framing line rewritten to prioritize defects over compensating positives; reference prompts disabled via `ENABLE_CRITIC_REFERENCES = False` feature flag in `orchestrator/agent_router.py`. Awaiting spot-check validation against `/tmp/b4a-subset.json`.
 - *Severity:* critical for the auto-ingest flywheel.
 
 **Bug #15 — Few-Shot Generator retrieval blocked by empty `few_shot_examples` field in seed data.**
