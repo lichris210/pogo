@@ -328,7 +328,7 @@ def write_run_file(
         },
         "results": results,
     }
-    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return out_path
 
 
