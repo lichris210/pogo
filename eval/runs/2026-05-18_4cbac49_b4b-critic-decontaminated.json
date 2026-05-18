@@ -1,0 +1,97 @@
+{
+  "metadata": {
+    "captured_at": "2026-05-18T06:38:46.515738+00:00",
+    "commit_sha": "4cbac49",
+    "branch": "claude/phase-b4b-decontamination-khFef",
+    "entry_count": 3,
+    "captured_count": 1,
+    "skipped_count": 2
+  },
+  "results": [
+    {
+      "eval_id": "eval_001",
+      "input": {
+        "id": "eval_001",
+        "task_category": "code_generation",
+        "target_model_family": "claude",
+        "expected_path": "chained",
+        "user_prompt": "Build a small Flask web app that lets a user upload a CSV, validates the schema against a provided JSON spec, persists the rows to SQLite, and exposes a /search endpoint that returns matching rows as JSON.",
+        "pre_baked_context": "Schema spec is a JSON file with columns: name (string, required), email (string, required, RFC 5322), age (int, 0-120, optional). SQLite database lives at ./data/uploads.db. /search accepts ?name= and ?min_age= query params and returns up to 100 rows. No auth needed; this is for local use. Python 3.11, Flask 3.x, pytest for tests. Code should be production-shaped but pragmatic, not enterprise-grade.",
+        "notes": "Multi-component build (validation + persistence + API). Strong chained-path candidate because of the natural phase split: schema, ingest, API."
+      },
+      "captured": {
+        "architect_draft": "<role>\nYou are an expert Python backend engineer specializing in Flask, SQLite, and data validation. \nYour task is to write clear, production-ready code with proper error handling and documentation.\n</role>\n\n<context>\nWe are building a lightweight web service that:\n1. Accepts CSV file uploads\n2. Validates rows against a JSON schema\n3. Persists valid rows to SQLite\n4. Provides a search endpoint to retrieve rows by field values\n\nTarget framework: Flask\nDatabase: SQLite\nData format: CSV (input), JSON (output and schema)\n</context>\n\n<task>\nWrite a complete Flask application (single file or minimal structure) that implements the following features:\n\n1. **POST /upload** — accepts a CSV file, validates each row against the provided schema, stores valid rows in SQLite, and returns a JSON summary (rows accepted, rows rejected, error details).\n\n2. **GET /search** — accepts query parameters matching column names and returns all rows where the specified columns match the given values (exact match). Return results as JSON array.\n\n3. **Schema validation** — use the provided JSON schema spec to validate row structure, data types, and required fields before insertion.\n\n4. **Error handling** — gracefully handle malformed CSV, schema violations, and database errors. Return meaningful error messages.\n\n5. **Database schema** — create the SQLite table dynamically based on the provided JSON schema, or provide explicit setup instructions.\n</task>\n\n<constraints>\n- No external validation libraries (use built-in Python type checking or simple custom logic).\n- CSV must be parsed row-by-row; do not load entire file into memory at once if file is large.\n- All database queries must use parameterized statements to prevent SQL injection.\n- The application must be runnable with `python app.py` and listen on `http://localhost:5000`.\n- Return all responses as JSON (including error messages).\n- Do not require authentication or complex configuration; keep setup minimal.\n</constraints>\n\n<schema_input>\nFor concreteness, use this example JSON schema unless the user provides a different one:",
+        "critic_score": 0.6,
+        "critic_feedback": "```json\n{\n  \"clarity\": 8,\n  \"specificity\": 7,\n  \"completeness\": 6,\n  \"constraint_coverage\": 6,\n  \"hallucination_risk\": 3,\n  \"overall\": 6.5\n}\n```\n\n---\n\n## Dimension Scores\n\n**Clarity: 8/10**\nThe prompt uses clear XML structure and unambiguous language throughout. The role definition is specific, and the context establishes concrete tech choices. Examples are well-formatted and leave little room for misinterpretation of expected behavior.\n\n**Specificity: 7/10**\nTechnology stack is pinned (Python 3.11, Flask 3.x, SQLite), the schema structure is defined, and response formats are shown. However, the prompt lacks explicit constraints on: CSV file size limits, maximum row count per upload, field value length caps, and handling of duplicate rows or case sensitivity in search queries.\n\n**Completeness: 6/10**\nThe prompt includes role, context, examples, and implicit task framing, but it **lacks an explicit `<task>` section** that clearly states what code the engineer should produce (Flask app skeleton? Full implementation? Unit test structure?). The `<constraints>` section is also missing, requiring the reader to infer constraints from examples and context. This ambiguity about deliverable scope and hard boundaries reduces completeness.\n\n**Constraint Coverage: 6/10**\nThe examples demonstrate validation behavior (missing required fields, type coercion, rejection rules), but explicit constraints are sparse: no stated row limits, timeout behavior, disk space handling, or concurrency guarantees. Edge cases like empty CSV files, malformed JSON schemas, or database connection failures are not addressed. Search query behavior (case sensitivity, partial matching, null handling) is under-specified.\n\n**Hallucination Risk: 3/10**\nThe prompt is well-grounded in specific examples and technology choices, limiting invention. However, the vague task statement (\"write clear... code\") could tempt the model to hallucinate implementation details (e.g., authentication, pagination, caching) not requested. The missing schema definition in the context (promised but not provided) increases risk of fabricated assumptions.\n\n**Overall: 6.5/10**\nThe prompt demonstrates good structure and examples but falls short of production-grade specificity. It reads more like a feature request than an executable prompt. The missing `<task>` and `<constraints>` sections are the primary liability; clarifying deliverables and adding boundary conditions would elevate this to 8+.\n\n---\n\n## Actionable Improvements\n\n1. **Add explicit `<task>` section** specifying deliverables: \"Write a complete Flask application with three endpoints (`POST /upload`, `GET /search`, and a status endpoint). Include unit tests for validation logic.\" Define whether you want a skeleton, full implementation, or both.\n\n2. **Define hard constraints as a `<constraints>` block**: Add limits (e.g., \"Max CSV file size: 10MB; Max rows per file: 100,000; Case-insensitive search; Reject rows with any null required field without coercion\"). Specify error handling (e.g., \"On SQLite lock, retry up to 3 times before returning 503\").\n\n3. **Embed the full JSON schema definition in `<context>`** rather than referencing it vaguely (currently says \"fixed schema\" but doesn't show it). Provide a complete example schema as a concrete reference to prevent the model from inventing schema variations.",
+        "final_output": "<role>\nYou are an expert Python backend engineer specializing in Flask, SQLite, and data validation.\nYour task is to write clear, production-ready code with proper error handling, documentation, and testability.\nTone: pragmatic and direct; prioritize clarity and robustness over over-engineering.\n</role>\n\n<context>\nWe are building a lightweight web service for CSV ingestion and search:\n- Accepts CSV file uploads\n- Validates rows against a JSON schema\n- Persists valid rows to SQLite\n- Provides a search endpoint to retrieve rows by field values\n\n**Technology stack:**\n- Python 3.11\n- Flask 3.x\n- SQLite (at `./data/uploads.db`)\n- No external validation libraries (use built-in type checking)\n\n**Schema definition:**\nThe application uses this fixed schema:\n\n<examples>\n# Few-Shot Examples for Data Analysis Task\n\nExample 1 — Typical case: successful CSV upload with mixed valid/invalid rows\nInput:\n```\nPOST /upload\nContent-Type: multipart/form-data\n\nFile: data.csv\nname,age,email\nAlice,28,alice@example.com\nBob,invalid_age,bob@example.com\nCharlie,35,charlie@example.com\n\nSchema:\n{\n  \"fields\": [\n    {\"name\": \"name\", \"type\": \"string\", \"required\": true},\n    {\"name\": \"age\", \"type\": \"integer\", \"required\": true},\n    {\"name\": \"email\", \"type\": \"string\", \"required\": true}\n  ]\n}\n```\n\nOutput:\n```json\n{\n  \"status\": \"completed\",\n  \"summary\": {\n    \"total_rows\": 3,\n    \"accepted\": 2,\n    \"rejected\": 1\n  },\n  \"errors\": [\n    {\n      \"row_number\": 2,\n      \"row_data\": {\"name\": \"Bob\", \"age\": \"invalid_age\", \"email\": \"bob@example.com\"},\n      \"reason\": \"Field 'age' must be integer, got string\"\n    }\n  ]\n}\n```\n\n---\n\nExample 2 — Edge case: missing required field and type coercion boundary\nInput:\n```\nPOST /upload\nContent-Type: multipart/form-data\n\nFile: data.csv\nname,age,email\nDavid,,david@example.com\nEve,25,\nFrank,30.5,frank@example.com\n\nSchema:\n{\n  \"fields\": [\n    {\"name\": \"name\", \"type\": \"string\", \"required\": true},\n    {\"name\": \"age\", \"type\": \"integer\", \"required\": true},\n    {\"name\": \"email\", \"type\": \"string\", \"required\": true}\n  ]\n}\n```\n\nOutput:\n```json\n{\n  \"status\": \"completed\",\n  \"summary\": {\n    \"total_rows\": 3,\n    \"accepted\": 0,\n    \"rejected\": 3\n  },\n  \"errors\": [\n    {\n      \"row_number\": 1,\n      \"row_data\": {\"name\": \"David\", \"age\": \"\", \"email\": \"david@example.com\"},\n      \"reason\": \"Required field 'age' is missing or empty\"\n    },\n    {\n      \"row_number\": 2,\n      \"row_data\": {\"name\": \"Eve\", \"age\": \"25\", \"email\": \"\"},\n      \"reason\": \"Required field 'email' is missing or empty\"\n    },\n    {\n      \"row_number\": 3,\n      \"row_data\": {\"name\": \"Frank\", \"age\": \"30.5\", \"email\": \"frank@example.com\"},\n      \"reason\": \"Field 'age' must be integer, got float-like string\"\n    }\n  ]\n}\n```\n\n---\n\nExample 3 — Search query with exact-match filtering\nInput:\n```\nGET /search?age=28&name=Alice\n```\n\nOutput:\n```json\n{\n  \"status\": \"success\",\n  \"query\": {\n    \"age\": \"28\",\n    \"name\": \"Alice\"\n  },\n  \"results\": [\n    {\n      \"name\": \"Alice\",\n      \"age\": 28,\n      \"email\": \"alice@example.com\"\n    }\n  ],\n  \"count\": 1\n}\n```\n</examples>",
+        "elapsed_seconds": 58.84,
+        "token_count": 12176,
+        "token_breakdown": {
+          "input_tokens": 6827,
+          "output_tokens": 5349
+        }
+      },
+      "rating": {
+        "score": null,
+        "notes": null,
+        "rated_at": null
+      }
+    },
+    {
+      "eval_id": "eval_007",
+      "input": {
+        "id": "eval_007",
+        "task_category": "classification",
+        "target_model_family": "claude",
+        "expected_path": "one_shot",
+        "user_prompt": "Build a prompt that classifies inbound customer support tickets into urgency (low/medium/high/critical) and routing destination (billing, technical, account, other).",
+        "pre_baked_context": "Tickets are 1-3 sentence customer messages. The classifier should return JSON: {urgency, routing, confidence, reasoning}. Confidence is a float 0-1. Critical is reserved for outages affecting business operations or data loss. Examples must include at least one edge case (ambiguous routing).",
+        "notes": "Classification with structured output; one-shot."
+      },
+      "captured": {
+        "architect_draft": "",
+        "critic_score": 0.0,
+        "critic_feedback": "",
+        "final_output": "",
+        "elapsed_seconds": 36.823,
+        "token_count": 0,
+        "skipped": true,
+        "skip_reason": "pipeline error: OverloadedError",
+        "error": "OverloadedError: Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011Cb9aFufKB3oM5EN1bSe7o'}"
+      },
+      "rating": {
+        "score": null,
+        "notes": null,
+        "rated_at": null
+      }
+    },
+    {
+      "eval_id": "eval_011",
+      "input": {
+        "id": "eval_011",
+        "task_category": "translation",
+        "target_model_family": "gemini",
+        "expected_path": "one_shot",
+        "user_prompt": "Translate product release notes from English to Brazilian Portuguese while preserving brand names, version numbers, and inline code identifiers verbatim.",
+        "pre_baked_context": "Source is markdown. Code spans (backticks) and code blocks must not be translated. Brand names: 'Snowdrift', 'Cascade', 'FlightDeck' â€” keep verbatim. Version strings like 'v2.3.1' verbatim. Target tone: professional but approachable, second person plural ('vocÃªs') is fine. Preserve markdown structure exactly.",
+        "notes": "Translation with strict preserve-list and structural fidelity; one-shot."
+      },
+      "captured": {
+        "architect_draft": "",
+        "critic_score": 0.0,
+        "critic_feedback": "",
+        "final_output": "",
+        "elapsed_seconds": 7.308,
+        "token_count": 0,
+        "skipped": true,
+        "skip_reason": "pipeline error: OverloadedError",
+        "error": "OverloadedError: Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011Cb9aH7DcUngLKtxq6v2y2'}"
+      },
+      "rating": {
+        "score": null,
+        "notes": null,
+        "rated_at": null
+      }
+    }
+  ]
+}
