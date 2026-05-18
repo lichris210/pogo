@@ -188,6 +188,13 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage.
 - *Severity:* critical for the auto-ingest flywheel.
 
+**Bug #15 — Few-Shot Generator retrieval blocked by empty `few_shot_examples` field in seed data.**
+- *Symptom:* `retrieve_few_shot_examples` filters to records where `few_shot_examples` is non-empty. All 139 seed records have an empty `few_shot_examples` field (both in source `seed_prompts.json` and in `s3://pogo-knowledge-base/prompt_db/prompts.json`). Retrieval always returns 0.
+- *Effect:* Few-Shot Generator falls back to its hardcoded template path regardless of whether the DB is seeded. Seeding does not improve the Few-Shot side of the pipeline.
+- *Implication for Bug #13:* the "hallucinate user-specific data" symptom is not caused by an unseeded DB. Root cause is elsewhere — likely the Few-Shot Generator's prompt instructs the model to fabricate concrete values rather than emit placeholders. Address in the Few-Shot system prompt during Phase B4B, not via data fixes.
+- *Possible fixes:* (a) populate `few_shot_examples` for each seed record (manual or semi-automated — substantial work, probably a Phase E task), (b) modify the retriever to synthesize example pairs from `user_prompt_template` plus a hypothetical output, or (c) repurpose `retrieve_reference_prompts` output as few-shot context.
+- *Severity:* high. Invalidates one of B4A's premises.
+
 **Operational gap — Prompt DB never seeded.**
 - *Symptom:* `bash scripts/seed_prompt_db.sh` has never been run.
 - *Effect:* The Few-Shot Generator runs on hardcoded fallback templates rather than the 139 seeded exemplars. The Critic's `reference_prompts` field is empty, removing the comparison anchor it was designed to use. RAG retrieval returns nothing.
