@@ -1,1 +1,3 @@
 numpy
+anthropic
+boto3

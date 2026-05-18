@@ -7,7 +7,7 @@ import numpy as np
 
 S3_BUCKET = "pogo-knowledge-base"
 EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
-GEN_MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+GEN_MODEL_ID = "claude-haiku-4-5-20251001"
 TOP_K = 5
 
 MODEL_PROFILES = {
@@ -34,6 +34,11 @@ _bedrock = None
 
 
 def get_bedrock():
+    """Cached ``bedrock-runtime`` client. Used only for Titan embeddings.
+
+    The Anthropic generation call moved to ``orchestrator.anthropic_client``
+    in Phase B3; this client only powers :func:`embed_query`.
+    """
     global _bedrock
     if _bedrock is None:
         _bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
@@ -124,19 +129,15 @@ Relevant Research:
 
 Generate an optimized prompt for this task."""
 
-    bedrock = get_bedrock()
-    response = bedrock.invoke_model(
-        modelId=GEN_MODEL_ID,
-        body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1500,
-            "messages": [{"role": "user", "content": user_message}],
-            "system": system_prompt
-        })
-    )
+    from orchestrator.anthropic_client import create_message
 
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"]
+    result = create_message(
+        model=GEN_MODEL_ID,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}],
+        max_tokens=1500,
+    )
+    return result["text"]
 
 
 def lambda_handler(event, context):

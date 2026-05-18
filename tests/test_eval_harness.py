@@ -39,7 +39,7 @@ class TestRunEntryCapture(unittest.TestCase):
         self.assertIn("pre_baked_context", result.skip_reason)
         self.assertEqual(result.token_count, 0)
 
-    def test_captures_pipeline_outputs_with_stubbed_bedrock(self):
+    def test_captures_pipeline_outputs_with_stubbed_anthropic(self):
         """End-to-end per-entry capture using the dry-run patch.
 
         Verifies architect_draft, critic_score, final_output, and token

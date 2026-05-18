@@ -108,7 +108,7 @@ class TestLiveTest(unittest.TestCase):
                 "text": "Input: Review this short SQL query and explain its purpose.",
                 "usage": {"total_tokens": 13},
             },
-            TimeoutError("bedrock timed out"),
+            TimeoutError("anthropic call timed out"),
         ]
 
         result = run_live_test("You are a SQL explainer.", "claude")

@@ -8,7 +8,8 @@ directly — it does NOT call the deployed Lambda.
 Each entry's pre_baked_context is fed as the user reply that would
 normally come back from the Clarifier interaction. Entries without
 pre_baked_context are skipped-and-logged. Infrastructure failures
-(Bedrock unreachable, etc.) also skip-and-log rather than failing the run.
+(Anthropic API unreachable, missing API key, etc.) also skip-and-log
+rather than failing the run.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ DEFAULT_RUNS_DIR = REPO_ROOT / "eval" / "runs"
 
 @dataclass
 class TokenCounter:
-    """Accumulates Bedrock token usage across a single eval entry."""
+    """Accumulates Anthropic token usage across a single eval entry."""
 
     total: int = 0
     input: int = 0
@@ -59,7 +60,7 @@ class TokenCounter:
 def _track_tokens():
     """Patch agent_router.invoke_agent_raw to accumulate token usage.
 
-    Yields a :class:`TokenCounter` updated in-place as Bedrock calls happen.
+    Yields a :class:`TokenCounter` updated in-place as Anthropic calls happen.
     Restores the original function on exit.
     """
     from orchestrator import agent_router
@@ -394,9 +395,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Stub all Bedrock calls. Useful when AWS credentials are absent; "
-             "produces a run file with placeholder captures so the shape can "
-             "be inspected.",
+        help="Stub all Anthropic calls. Useful when ANTHROPIC_API_KEY is "
+             "absent; produces a run file with placeholder captures so the "
+             "shape can be inspected.",
     )
     args = parser.parse_args(argv)
 
@@ -443,10 +444,10 @@ def _noop_context():
 
 @contextmanager
 def _dry_run_patch():
-    """Patch Bedrock invocation with deterministic stubs.
+    """Patch Anthropic invocation with deterministic stubs.
 
-    For local smoke-testing of the runner shape without AWS credentials.
-    Real baseline runs should NOT use this mode.
+    For local smoke-testing of the runner shape without an
+    ``ANTHROPIC_API_KEY``. Real baseline runs should NOT use this mode.
     """
     from orchestrator import agent_router
 

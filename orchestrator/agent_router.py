@@ -1,19 +1,28 @@
-"""Agent router — task classification, Bedrock invocation, and parallel execution.
+"""Agent router — task classification, Anthropic invocation, and parallel execution.
 
-Reuses the cached Bedrock client pattern from the existing ``lambda/handler.py``.
+Calls go through ``orchestrator.anthropic_client`` so every agent shares one
+cached SDK client and one response shape.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Model IDs (same as existing handler for consistency)
+from orchestrator.anthropic_client import create_message
+
+# B4B: Critic references disabled. B4A surfaced that seeded references made
+# Critic calibration WORSE, not better — the Critic over-anchored on
+# superficial structural cues from the reference prompts (see Bug #14 in
+# PLAN_REDESIGN.md). Re-evaluate in B4C or Phase E after the Critic system
+# prompt has been validated to handle references correctly.
+ENABLE_CRITIC_REFERENCES = False
+
+# Model IDs. Defaults bumped to Anthropic API model strings (Phase B3).
 ARCHITECT_MODEL_ID = os.environ.get(
     "POGO_AGENT_MODEL_ID",
-    "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    "claude-haiku-4-5-20251001",
 )
 LIGHT_MODEL_ID = os.environ.get("POGO_LIGHT_MODEL_ID", ARCHITECT_MODEL_ID)
 _TARGET_MODEL_ENV_KEYS = {
@@ -21,18 +30,6 @@ _TARGET_MODEL_ENV_KEYS = {
     "gpt": "POGO_TARGET_MODEL_ID_GPT",
     "gemini": "POGO_TARGET_MODEL_ID_GEMINI",
 }
-
-_bedrock = None
-
-
-def _get_bedrock():
-    """Return a cached ``bedrock-runtime`` client."""
-    global _bedrock
-    if _bedrock is None:
-        import boto3
-
-        _bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
-    return _bedrock
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +88,11 @@ def classify_task(user_intent: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bedrock invocation
+# Anthropic invocation
 # ---------------------------------------------------------------------------
 
 def resolve_target_model_id(target_model: str) -> str:
-    """Return the Bedrock model ID configured for a target-model family.
+    """Return the Anthropic model ID configured for a target-model family.
 
     Falls back to the orchestrator's default Anthropic model so local
     development still works when family-specific overrides are unset.
@@ -113,29 +110,19 @@ def invoke_agent_raw(
     model_id: str | None = None,
     max_tokens: int = 2000,
 ) -> dict:
-    """Call Bedrock and return assistant text plus usage metadata."""
-    bedrock = _get_bedrock()
+    """Call the Anthropic API and return assistant text plus usage metadata."""
     mid = model_id or ARCHITECT_MODEL_ID
-
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": messages,
-    }
-
-    response = bedrock.invoke_model(
-        modelId=mid,
-        body=json.dumps(body),
-        contentType="application/json",
-        accept="application/json",
+    result = create_message(
+        model=mid,
+        messages=messages,
+        system=system,
+        max_tokens=max_tokens,
     )
-    result = json.loads(response["body"].read())
     usage = _normalise_usage(result.get("usage"))
     return {
         "agent_name": agent_name,
         "model_id": mid,
-        "text": result["content"][0]["text"],
+        "text": result["text"],
         "usage": usage,
     }
 
@@ -147,13 +134,13 @@ def invoke_agent(
     model_id: str | None = None,
     max_tokens: int = 2000,
 ) -> str:
-    """Call Bedrock with a messages array and return the assistant's text.
+    """Call the Anthropic API with a messages array and return the assistant's text.
 
     Args:
         agent_name: Label for logging (e.g. ``"prompt_architect"``).
         messages: Messages list from an agent's ``build_messages()``.
         system: The system prompt string.
-        model_id: Bedrock model ID. Defaults to :data:`ARCHITECT_MODEL_ID`.
+        model_id: Anthropic model ID. Defaults to :data:`ARCHITECT_MODEL_ID`.
         max_tokens: Response token limit.
 
     Returns:
@@ -285,7 +272,10 @@ def run_critic_review(
     """Invoke the Critic with retrieved reference prompts for comparison."""
     from agents import critic
 
-    reference_prompts = fetch_reference_prompts(task_category, target_model, k=k)
+    if ENABLE_CRITIC_REFERENCES:
+        reference_prompts = fetch_reference_prompts(task_category, target_model, k=k)
+    else:
+        reference_prompts = []
     messages, system = critic.build_messages(
         final_prompt=final_prompt,
         task_category=task_category,

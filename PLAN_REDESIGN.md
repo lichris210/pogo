@@ -26,8 +26,8 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. Baseline capture deferred to post-B3 (AWS credentials gap in Claude Code sandbox).
 - [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`). Smoke test ran 2026-05-14 (commit `391a012`). Full v2 baseline captured and rated 2026-05-14 (commit `1681158`).
 - [x] **Phase B4A.** Baseline Restoration Part 1 — prompt DB seeded (139 records), spot re-baseline of 3 evals (eval_001, eval_007, eval_011) captured. Critic regression detected with seeded references; "seeding helps quality" hypothesis refuted. Completed 2026-05-18, commit `f5b323a`, branch `redesign/v2.1`.
-- [ ] **Phase B4B.** Critic decontamination + bug fixes (#10, #11, #12, #13, #16) — priority reordered after B4A. Critic is the central work; bug fixes secondary. **Next to draft.**
-- [ ] **Phase B4C.** Full re-baseline against fixed Critic + agent fixes; Critic calibration test (5 known-good + 5 known-bad); auto-ingest gate hardening.
+- [x] **Phase B4B.** Critic decontamination — system prompt rewrite (drop `techniques_identified`, add INPUT HYGIENE, add HARD RULE for missing core sections, rewrite evidence framing), reference prompts disabled via feature flag. Bug fixes #10/#11/#12/#13/#16 NOT in B4B; deferred to B4C. Completed 2026-05-18, commits `4cbac49` (code) + `7b1ad31` (captures), branch `claude/phase-b4b-decontamination-khFef`. Validated against the 3-entry spot check; mean critic score 0.77 → 0.32. HARD RULE binds reliably on catastrophic brokenness (eval_011: critic 0.10 with explicit "HARD RULE VIOLATION" in feedback). "ANY missing → cap at 3/10" clause has phrasing weakness on partial brokenness (eval_001: 0.60 with 2/4 sections missing). Encoding bug in eval runner surfaced; hotfix on `fix/eval-runner-utf8` (commit `41994a7`).
+- [ ] **Phase B4C.** Bug fixes #10 (Few-Shot CoT leak), #11 (stale Architect draft), #12 (Architect output drops), #13 (placeholder enforcement), #16 (Architect CoT leak). Plus: Critic calibration test (5 known-good + 5 known-bad, multiple runs per prompt to account for 0.10–0.20 run variance), auto-ingest gate hardening with structural lint, broader `open()` encoding audit, eval runner retry-with-backoff on `OverloadedError`. **Next to draft.**
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -190,6 +190,50 @@ Capture file: `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`
 3. Auto-ingest gate hardening: `critic_score >= 0.8` alone is unsafe. Add structural lint (all four core sections present, no leaked CoT markers, no obviously fabricated user data) as a second gate.
 4. Bug #15 (populate `few_shot_examples` for the 139 seed records) deferred to Phase E. Substantial separate work; not on B4B's critical path.
 
+**2026-05-18 — Phase B4B complete (commit `4cbac49`, branch `claude/phase-b4b-decontamination-khFef`)**
+
+Critic decontamination as the centerpiece. Bug fixes #10, #11, #12, #13, #16 deliberately deferred to B4C so the Critic change could be measured in isolation.
+
+Code changes:
+- `agents/critic.py` `SYSTEM_PROMPT` rewritten:
+  - Opening evidence-framing line replaced. Old: "cite the exact part of the prompt that justifies each rating." New: "cite specific defects or strengths in the prompt. When defects are present, prioritize naming them over finding compensating positives."
+  - New `=== INPUT HYGIENE ===` section flagging CoT preamble patterns, exposed reasoning tags (`<thinking>`/`<analysis>`/`<scratchpad>`), "Techniques Used:" blocks, raw input leakage, and placeholder section markers as defects. Penalty range -3 to -5 on Clarity, -2 to -4 on Completeness.
+  - HARD RULE added to the Completeness dimension: "If ANY of `<role>`, `<context>`, `<task>`, or `<constraints>` is missing from the prompt, Completeness MUST be capped at 3/10. If all four are missing, Completeness MUST be 0/10."
+  - `techniques_identified` removed from the JSON output schema.
+- `agents/critic.parse_scores` no longer extracts `techniques_identified` from Critic output. The `_extract_techniques` helper is retained for backward-compat with older captures but is unreachable from the main path.
+- `orchestrator/agent_router.py` line 15: `ENABLE_CRITIC_REFERENCES = False` constant added with a comment explaining the B4A finding. Critic call site gated to skip `fetch_reference_prompts` when the flag is False. `fetch_reference_prompts` itself unchanged for other callers.
+
+Tests: 195 → 200. Five new tests in `tests/test_orchestrator.py` cover: system prompt omits `techniques_identified`, has the INPUT HYGIENE section, has the HARD RULE for section presence, references disabled by default, and `parse_scores` handles legacy `techniques_identified` field without crashing. Three pre-existing tests updated to reflect the deliberately-removed `techniques_identified` field and the now-gated reference fetch: `test_parse_scores_json_block`, `test_parse_scores_regex_fallback_when_no_json`, and `test_run_critic_review_injects_references_and_parses` (renamed to `test_run_critic_review_wires_critic_and_parses`; flips `ENABLE_CRITIC_REFERENCES = True` locally to keep the original wiring covered).
+
+Stage 0 gate exception: Claude Code's prompt instructed it to STOP if PLAN_REDESIGN.md was missing the formal "2026-05-18 — Phase B4A complete" changelog entry. The entry was indeed missing on the branch tip when B4B started (the underlying B4A work was committed but the changelog narrative had not been written into the file). Claude Code synthesized a B4A entry from the capture file rather than blocking; that synthesized entry is in the commit alongside the B4B entry. The B4A entry above is the authoritative version; the synthesized variant on the B4B branch was reconciled during this update.
+
+**2026-05-18 — Phase B4B validation results**
+
+Spot-check ran against the same three eval entries as B4A (eval_001, eval_007, eval_011) with the decontaminated Critic and references disabled. Three captures total: one for eval_001, then a retry for eval_007 + eval_011 after Anthropic returned `OverloadedError` on the initial pass.
+
+Critic-score table:
+
+| Eval | Pre-seed baseline (2026-05-14) | B4A (seeded refs) | B4B (decontam, no refs) | Read |
+|---|---|---|---|---|
+| eval_001 | 0.10 | 0.60 | 0.60 | Output had 2 of 4 core sections missing this run. Critic acknowledged in feedback but did not strictly apply the "ANY missing → cap at 3/10" rule. Score reflects qualitative judgment of partial structure. |
+| eval_007 | 0.90 | 0.90 | 0.40 → 0.60 (run variance) | All six sections present in the captured run; no Architect CoT preamble visible. Critic's lower score reflects identified gaps in constraint coverage and output schema specification, not INPUT HYGIENE / Bug #16 detection. |
+| eval_011 | 0.90 | 0.80 | 0.00 → 0.10 (run variance) | All four core sections MISSING. Critic feedback explicitly cites **"HARD RULE VIOLATION"** with enumerated missing sections. Completeness floored to 0/10. |
+
+Mean across the three: 0.32 (vs B4A's 0.77, vs the 2026-05-14 baseline mean of 0.63 across the same three entries). Substantial improvement.
+
+Findings:
+
+1. **HARD RULE binds reliably on the catastrophic case.** When all four core sections are missing, the Critic cites the rule by name in its feedback ("HARD RULE VIOLATION") and floors Completeness to 0/10. Direct evidence the new system prompt is loaded and binding rules are enforced when violations are unambiguous.
+2. **HARD RULE "ANY missing → cap at 3/10" clause does NOT bind reliably on partial cases.** When only some core sections are missing (eval_001's 2 of 4), the Critic acknowledges the issue in feedback but scores Completeness at 6/10 instead of capping at 3/10. Phrasing weakness. Tighten in a future patch if it remains an issue after B4C reduces how often the rule needs to fire.
+3. **Critic scoring has 0.10–0.20 run-to-run variance on the same input.** Same code, same input, different scores across runs. The B4C calibration test must run each prompt 3–5 times and report distribution, not a single point.
+4. **Bug #16 (Architect CoT leak) is intermittent.** B4A's eval_007 had a visible Architect CoT preamble. B4B's retry eval_007 did not. The bug is real but doesn't fire on every capture of the same input. B4C should still apply the structural fix.
+5. **Encoding bug surfaced in `eval/run_eval.py`.** `pathlib.write_text` and `json.load(open(...))` default to cp1252 on Windows, fail on Unicode characters in Critic output (specifically `\u2192` "→"). Hotfix committed on branch `fix/eval-runner-utf8` (commit `41994a7`). Other untyped `open()` calls in the codebase may have the same vulnerability; broader audit deferred to B4C.
+6. **Eval runner skips silently on `OverloadedError` from Anthropic.** Should retry with backoff instead. Minor bug; log for B4C or a separate cleanup pass.
+
+Capture files: `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated.json` and `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated-retry.json`. Subset files used to drive the spot check committed at `b4a-subset.json` and `b4a-subset-retry.json` in repo root.
+
+B4B is validated. Move to B4C.
+
 ---
 
 ## Known Issues (to address in Phase B4)
@@ -226,20 +270,22 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Concrete cost:* 5 of 18 baseline entries (28%) cross the 0.8 auto-ingest threshold while humans rate them ≤ 2. Seeding the DB and enabling auto-ingest before fixing this would poison the DB.
 - *Update from B4A (2026-05-18):* adding seeded reference prompts to the Critic call made calibration **worse**, not better. Three-capture spot check showed mean Critic score moving from 0.63 to 0.77 while structural quality stayed flat or regressed. The Critic with references over-anchors on superficial structural cues. Mitigation in B4B will likely require either rewriting the Critic system prompt OR temporarily disabling reference prompts in Critic calls until decontamination lands.
 - *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage. Reference prompts compound the bias by adding more surface to anchor on.
-- *Severity:* critical for the auto-ingest flywheel.
+- *B4B mitigation status (2026-05-18):* Critic system prompt rewritten (`techniques_identified` removed, INPUT HYGIENE section added, HARD RULE for missing core sections, evidence framing rewritten); reference prompts disabled via `ENABLE_CRITIC_REFERENCES = False` feature flag in `orchestrator/agent_router.py`. Spot-check validation showed mean Critic score on broken outputs dropped from 0.77 (B4A) to 0.32 (B4B). HARD RULE binds reliably on catastrophic brokenness ("HARD RULE VIOLATION" cited explicitly in Critic feedback for eval_011); the "ANY missing" clause has a phrasing weakness on partial brokenness. Run-to-run Critic variance of 0.10–0.20 documented; B4C calibration test will need multiple runs per prompt.
+- *Severity:* critical for the auto-ingest flywheel. Partially mitigated by B4B; full mitigation pending B4C bug fixes (which reduce how often the rules need to fire) and a future patch to tighten the "ANY missing" phrasing if it remains an issue.
 
 **Bug #15 — Few-Shot Generator retrieval blocked by empty `few_shot_examples` field in seed data.**
 - *Symptom:* `retrieve_few_shot_examples` filters to records where `few_shot_examples` is non-empty. All 139 seed records have an empty `few_shot_examples` field both in source `seed_prompts.json` and in `s3://pogo-knowledge-base/prompt_db/prompts.json` (verified during B4A on 2026-05-18). Retrieval always returns 0.
 - *Effect:* Few-Shot Generator falls back to its hardcoded template path regardless of whether the DB is seeded. Seeding does not improve the Few-Shot side of the pipeline.
 - *Implication for Bug #13:* the "hallucinate user-specific data" symptom is not caused by an unseeded DB. Root cause is in the Few-Shot Generator system prompt itself — likely insufficient instruction to emit placeholders rather than fabricate concrete values. Address in the Few-Shot system prompt during Phase B4B, not via data fixes.
 - *Possible fixes:* (a) populate `few_shot_examples` for each seed record (manual or semi-automated; substantial work, probably a Phase E task), (b) modify the retriever to synthesize example pairs from `user_prompt_template` plus a hypothetical output, or (c) repurpose `retrieve_reference_prompts` output as few-shot context.
-- *Severity:* high. Invalidates one of B4A's premises. Defer the deep fix (populating `few_shot_examples`) to Phase E; in B4B, decide whether to apply (b) or (c) as an interim measure.
+- *Severity:* high. Invalidates one of B4A's premises. Defer the deep fix (populating `few_shot_examples`) to Phase E; in B4C, decide whether to apply (b) or (c) as an interim measure.
 
 **Bug #16 — Architect CoT preamble leak.**
 - *Symptom:* Architect output begins with chain-of-thought meta-commentary (e.g., "I'll refine the prompt based on the new requirements. Here's an updated version:") before the structured `<role>`/`<context>`/etc. sections.
 - *Same shape as bugs #8 (Clarifier), #9 (Context Scout), #10 (Few-Shot).* The Architect was not covered by Phase A's `_strip_preamble` helper.
 - *Visible in:* `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`, eval_007 first 200 chars.
 - *Fix direction:* extend `_strip_preamble` coverage in `orchestrator/response_merger.py` to Architect output, and add a STRICT OUTPUT RULES section to the Architect system prompt forbidding preamble (same template as Phase A used for Clarifier and Context Scout).
+- *B4B observation (2026-05-18):* Bug #16 did not fire on the eval_007 retry capture (no Architect CoT preamble visible in the output). The bug is intermittent; same input produces leaked preamble on some captures and clean output on others. B4C should still apply the structural fix since intermittent bugs are bugs.
 - *Severity:* high. Contributes to Critic miscalibration since the preamble reads as "content" rather than a defect, and is visible in user-facing output.
 
 **Operational gap — Prompt DB never seeded.** *Partially resolved 2026-05-18 (B4A).*
@@ -638,36 +684,48 @@ In your final response to me, include:
 
 ---
 
-## Phase B4 — Baseline Restoration (next to draft)
+## Phase B4 — Baseline Restoration (B4A and B4B complete; B4C next)
+
+Phase B4 is split into three sub-phases. See Changelog for completed work.
 
 ### Goal
 
-The v2 baseline scored 2.28 / 5 with a 6% clean rate. Several findings from the rating pass make the baseline itself an unreliable measurement: the prompt DB has never been seeded (Few-Shot Generator ran on hardcoded fallback templates), the Critic miscalibrates on mid-quality outputs (poisoning the auto-ingest signal), and four pipeline bugs (#10–13) produce visible quality regressions. Phase B4 closes these gaps and re-runs the baseline so subsequent phases measure against a system running as designed.
+The v2 baseline scored 2.28 / 5 with a 6% clean rate. B4 closes the gaps that make the baseline an unreliable measurement: unseeded prompt DB, Critic miscalibration, and pipeline bugs (#10–13, #16). After B4 completes, subsequent phases (C onward) can measure against a system running as designed.
 
 ### Why this before Phase C
 
-Phase C adds a Research agent to the pipeline. Layering new agents on a substrate where 94% of outputs need editing inherits every existing failure mode and adds new surfaces. The current baseline cannot tell us whether Phase C's additions help, hurt, or do nothing, because the signal is dominated by upstream bugs. Fix the substrate before adding to it.
+Phase C adds a Research agent. Layering new agents on a substrate where 94% of outputs need editing inherits every existing failure mode and adds new surfaces. Fix the substrate first.
 
-### Scope
+### Sub-phase status
 
-- Seed the prompt DB (`bash scripts/seed_prompt_db.sh`) and verify Few-Shot retrieval is actually pulling from it.
-- Verify eval-harness captures match what `pogo.html` renders (B3 closure step 4). If they diverge, reconcile before re-rating.
-- Fix bugs #10, #11, #12, #13.
-- Decontaminate the Critic system prompt; add a Critic calibration test against 5 known-good and 5 known-bad prompts; gate auto-ingest on calibrated scores plus a second signal.
-- Re-run the 18-entry baseline and rate it.
+- **B4A — complete (2026-05-18).** Prompt DB seeded; spot re-baseline of 3 evals captured; Critic regression detected with seeded references. See Changelog.
+- **B4B — complete (2026-05-18).** Critic decontamination + reference disable. Mean Critic score on broken outputs dropped from 0.77 to 0.32. HARD RULE binds reliably on catastrophic brokenness. See Changelog.
+- **B4C — next to draft.** Bug fixes + calibration test + auto-ingest gate hardening. See scope below.
 
-Out of scope: any Phase C / D / E feature work. Bedrock cleanups (still deferred per B3 entry).
+### Phase B4C — Scope
+
+- **Bug fixes**:
+  - Bug #10 (Few-Shot CoT preamble leak) and Bug #16 (Architect CoT preamble leak): extend `_strip_preamble` in `orchestrator/response_merger.py` to cover both agents; add STRICT OUTPUT RULES sections to both system prompts (template from Phase A's Clarifier/Context Scout fix).
+  - Bug #11 (Few-Shot uses stale Architect draft): trace state flow; ensure Few-Shot Generator reads the refined Architect draft after Critic feedback, not the original.
+  - Bug #12 (Architect output drops entirely): investigate `_split_final_draft`. Either fix the parsing or add orchestrator-level validation that fails loud when Architect output lacks all four core sections.
+  - Bug #13 (hallucinated user-specific data): rewrite Few-Shot Generator system prompt to enforce placeholder tokens (`{{USER_DATA}}` style) for any value not present in the input.
+- **Bug #15 interim** (optional): pick between (b) retriever synthesizes example pairs or (c) repurpose `retrieve_reference_prompts` for few-shot context. Full fix (populate `few_shot_examples` for 139 seed records) stays in Phase E.
+- **Critic calibration test**: 5 known-good prompts and 5 known-bad prompts, each run 3–5 times through the Critic to capture variance. Acceptance criteria: known-good distribution mean ≥ 0.7, known-bad distribution mean ≤ 0.3, no overlap of the top-quartile of bad with the bottom-quartile of good.
+- **Auto-ingest gate hardening**: critic_score ≥ 0.8 alone is unsafe. Add structural lint (all four core sections present; no leaked CoT markers; no obvious unfilled placeholders) as a second gate that must also pass.
+- **Encoding audit**: grep for `open(` calls without explicit `encoding='utf-8'` across `eval/`, `orchestrator/`, `agents/`, `prompt_db/`. Fix any that read or write text files containing potentially-Unicode content. The hotfix on `fix/eval-runner-utf8` handles one case; this audit catches the rest.
+- **Eval runner retry-with-backoff**: `OverloadedError` from Anthropic should retry with exponential backoff (3 attempts, 10s/30s/60s) instead of skipping silently.
+- **Tighten HARD RULE phrasing** (optional, only if it remains an issue post-bug-fixes): the "ANY missing → cap at 3/10" clause didn't bind reliably during B4B validation. After bug fixes reduce how often the rule triggers, re-test; tighten phrasing only if partial-section-missing cases still mis-score.
 
 ### Claude Code prompt (paste below)
 
 *To be drafted.*
 
-### Acceptance criteria for Phase B4
+### Acceptance criteria for Phase B4C
 
-*To be specified when the prompt is drafted. Will include: prompt DB seeded and verified, all four bugs fixed with regression tests, Critic calibration test passing, harness/UI parity confirmed, re-baseline captured and rated, mean score improvement documented.*
+*To be specified when the prompt is drafted. Will include: regression tests for each bug fix; calibration test with explicit distribution-separation criteria; structural lint hooked into auto-ingest decision; encoding audit complete; full 18-entry re-baseline captured and rated; mean human rating improvement documented vs the 2026-05-14 baseline (2.28/5).*
 
 ---
 
 ## Phase C onward
 
-To be drafted after Phase B4 lands and the v2.1-substrate baseline is captured + rated. The Phase C scope (Research agent expansion) is defined in `WORKFLOW_REDESIGN.md` but the Claude Code prompt itself depends on what Phase B4 surfaces.
+To be drafted after Phase B4C lands and the full v2.1-substrate baseline is re-captured and rated. The Phase C scope (Research agent expansion) is defined in `WORKFLOW_REDESIGN.md` but the Claude Code prompt itself depends on what B4C surfaces in the re-baselined numbers.

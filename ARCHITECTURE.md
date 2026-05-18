@@ -18,7 +18,7 @@
 5. [API Gateway](#5-api-gateway)
 6. [Frontend](#6-frontend)
 7. [Vector Store (S3 + NumPy)](#7-vector-store-s3--numpy)
-8. [Bedrock Calls](#8-bedrock-calls)
+8. [Model Calls (Anthropic API + Bedrock Titan)](#8-model-calls-anthropic-api--bedrock-titan)
 9. [Knowledge Base Sources](#9-knowledge-base-sources)
 10. [v2 Multi-Agent Architecture](#10-v2-multi-agent-architecture)
 11. [Other Infrastructure](#11-other-infrastructure)
@@ -58,18 +58,19 @@
 │      → v1 /generate path  (embed → search → generate)            │
 └──┬───────────────────┬───────────────────┬──────────────────────┘
    │                   │                   │
-   │ S3 GetObject      │ DynamoDB          │ Bedrock InvokeModel
+   │ S3 GetObject      │ DynamoDB          │ Anthropic API + Bedrock Titan
    ▼                   ▼                   ▼
 ┌──────────────────────────┐ ┌────────────────────┐ ┌────────────────────────┐
-│  S3: pogo-knowledge-base │ │  DynamoDB          │ │  Amazon Bedrock        │
-│  index/…                 │ │  pogo-sessions     │ │  (us-east-1)           │
+│  S3: pogo-knowledge-base │ │  DynamoDB          │ │  Anthropic API         │
+│  index/…                 │ │  pogo-sessions     │ │  (api.anthropic.com)   │
 │    embeddings.npy        │ │  (v2 state)        │ │                        │
-│    chunks.pkl   (v1 RAG) │ └────────────────────┘ │  • Titan Embed v2      │
-│                          │                        │    (256-dim, cosine)   │
+│    chunks.pkl   (v1 RAG) │ └────────────────────┘ │  • Claude Haiku 4.5    │
+│                          │                        │    (all agents + v1)   │
 │  prompt_db/…    (v2 RAG) │                        │                        │
-│    prompts.json          │                        │  • Claude 3.5 Haiku    │
-│    embeddings.npy        │                        │    (all agents)        │
-└──────────────────────────┘                        └────────────────────────┘
+│    prompts.json          │                        │  Amazon Bedrock (us-1) │
+│    embeddings.npy        │                        │  • Titan Embed v2      │
+└──────────────────────────┘                        │    (256-dim, cosine)   │
+                                                    └────────────────────────┘
 
 ┌──────────────────────────┐
 │  S3: pogo-web-ui         │  ← static website hosting
@@ -103,7 +104,7 @@ API Gateway  ──→  Lambda (pogo-prompt-generator)
                      ├─ cosine_sim = query_vec @ embeddings.T
                      │    → argsort → top 5 chunk indices
                      │
-                     ├─ Bedrock InvokeModel (Claude 3.5 Haiku)
+                     ├─ Anthropic API (Claude Haiku 4.5)
                      │    system: POGO role + instructions
                      │    user:   task + model profile + 5 research chunks
                      │    output: optimized prompt + explanation (max 1500 tokens)
@@ -149,7 +150,7 @@ API Gateway  ──→  Lambda  ──→  orchestrator.handle_message(event)
                                    │                      high-scoring prompts into
                                    │                      prompt_db/ if overall/10 ≥ 0.8
                                    │
-                                   ├─ each agent call = Bedrock InvokeModel (Claude 3.5 Haiku)
+                                   ├─ each agent call = Anthropic API messages.create (Claude Haiku 4.5)
                                    ├─ reference prompts retrieved from prompt_db/ by
                                    │   task_category (not user input)
                                    ├─ DynamoDB PutItem  (persist session)
@@ -267,11 +268,11 @@ The v2 orchestrator import is **lazy** — the module is only loaded when `/opti
 | Function | Purpose |
 |----------|---------|
 | `lambda_handler(event, context)` | Entry point — dispatches /optimize to v2, else runs v1 search + generation |
-| `get_bedrock()` | Returns cached `boto3.client("bedrock-runtime")` instance (lazy singleton) |
+| `get_bedrock()` | Returns cached `boto3.client("bedrock-runtime")` instance (Titan embeddings only) |
 | `load_resources()` | Downloads `embeddings.npy` + `chunks.pkl` from S3 on first call; caches as globals |
 | `embed_query(text)` | Calls Bedrock Titan Embed v2; returns 256-dim normalized numpy vector |
 | `search(query, top_k)` | Loads S3 index on first call (cached globally); computes cosine similarity; returns top-K chunks |
-| `generate_prompt(task, model, chunks)` | Builds system + user messages; calls Bedrock Claude 3.5 Haiku; returns raw text |
+| `generate_prompt(task, model, chunks)` | Builds system + user messages; calls Anthropic API (Claude Haiku 4.5) via `orchestrator.anthropic_client.create_message`; returns raw text |
 
 ### Key functions (v2 `/optimize` path — see §10)
 
@@ -280,7 +281,8 @@ The v2 orchestrator import is **lazy** — the module is only loaded when `/opti
 | `orchestrator.handle_message(event)` | Main state-machine dispatcher — load/create session, route by state, save, respond |
 | `orchestrator.session.{create,load,save}_session` | DynamoDB-backed CRUD on `pogo-sessions` |
 | `orchestrator.agent_router.classify_task` | Keyword-based task categorisation |
-| `orchestrator.agent_router.invoke_agent` | Calls Bedrock with `(messages, system)` from an agent's `build_messages()` |
+| `orchestrator.agent_router.invoke_agent` | Calls the Anthropic API (via `orchestrator.anthropic_client`) with `(messages, system)` from an agent's `build_messages()` |
+| `orchestrator.anthropic_client.create_message` | Thin wrapper around `anthropic.Anthropic().messages.create()`; reads `ANTHROPIC_API_KEY`, caches the SDK client, normalises response shape |
 | `orchestrator.agent_router.invoke_parallel` | ThreadPoolExecutor-based parallel agent calls with order preservation |
 | `orchestrator.agent_router.fetch_reference_prompts` | Pulls top-k reference prompts from `prompt_db/` by task category |
 | `prompt_db.retrieve.retrieve_reference_prompts` | Cosine-similarity retrieval filtered by target model |
@@ -504,44 +506,65 @@ return [chunks[i] for i in top_indices]
 
 ---
 
-## 8. Bedrock Calls
+## 8. Model Calls (Anthropic API + Bedrock Titan)
 
-All Bedrock calls go through a single `boto3.client("bedrock-runtime", region_name="us-east-1")` instance cached at module scope in the Lambda.
+Phase B3 (2026-05-13) migrated all agent generation calls from Amazon Bedrock to the Anthropic API directly. Titan embeddings still run on Bedrock; the agent/completion path no longer uses Bedrock at all.
 
-### Call 1 — Titan Text Embeddings v2
+- **Anthropic API:** every v2 agent + the legacy v1 `/generate` generation call goes through `orchestrator.anthropic_client.create_message()`, which wraps `anthropic.Anthropic().messages.create(...)`. The client reads `ANTHROPIC_API_KEY` from the env and is cached at module scope.
+- **Bedrock Titan:** `boto3.client("bedrock-runtime")` is still used for the 256-dim embedding model in `lambda/handler.py:embed_query()` and `prompt_db/embeddings.py`.
+
+### Call 1 — Titan Text Embeddings v2 (Bedrock)
 
 | Property | Value |
 |----------|-------|
 | Model ID | `amazon.titan-embed-text-v2:0` |
-| Invoked in | `lambda/handler.py:embed_query()` and `build_index_titan.py` |
+| Invoked in | `lambda/handler.py:embed_query()`, `prompt_db/embeddings.py`, `build_index_titan.py` |
 | Purpose | Encode user task (and knowledge base chunks) into 256-dim vectors |
 | Input | `{"inputText": text}` |
 | Output | `{"embedding": [float, ...]}` (256 values) |
 | Throttle guard (index build) | 50 ms sleep between batch calls |
 
-### Call 2 — Claude 3.5 Haiku
+### Call 2 — Claude Haiku 4.5 (Anthropic API)
 
 | Property | Value |
 |----------|-------|
-| Model ID | `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
-| Invoked in | `lambda/handler.py:generate_prompt()` |
-| Purpose | Generate optimized, research-grounded prompt for the target model |
-| Max tokens | 1500 |
-| System message | POGO role definition + output format instructions |
-| User message | Task description + model profile (strengths/techniques/avoid) + top-5 research chunks |
-| Output format | Markdown code block containing the prompt + technique explanations + source citations |
+| Model ID | `claude-haiku-4-5-20251001` |
+| Invoked in | All v2 agents via `orchestrator.agent_router.invoke_agent` and the legacy v1 `lambda/handler.py:generate_prompt()` |
+| Purpose | Default agent model (Prompt Architect, Clarifier, Context Scout, Few-Shot Generator, Critic, live test) and v1 single-shot generation |
+| Max tokens | 1500 (v1) / 2000 (v2 agents) |
+| System message | Per-agent system prompts in `agents/` |
+| Output | `.content[0].text` (Anthropic SDK), normalised by the wrapper to `{"text": ..., "usage": {input_tokens, output_tokens, total_tokens}}` |
 
-### Bedrock invocation pattern
+The infrastructure now reads **"Anthropic API (Claude Haiku 4.5; Sonnet 4.6 available for higher-stakes phases) + Bedrock Titan for embeddings."** Sonnet 4.6 is not currently wired into any agent default; Phase C/D will route specific phases there as the per-phase tier map lands.
+
+**Cost profile note:** per-call rates moved from Bedrock to the Anthropic API. Haiku 4.5 list pricing as of 2026-05 is $1 per million input tokens / $5 per million output tokens; Sonnet 4.6 is $3 / $15. A typical v2 session (5–7 agent calls, ~1.5–3K total tokens) costs roughly $0.005–$0.02 on Haiku 4.5, ~3–4× the previous Haiku 3.5 floor but with materially better instruction-following. Embedding cost is unchanged (still Bedrock Titan).
+
+### Anthropic invocation pattern
 
 ```python
-response = _bedrock.invoke_model(
-    modelId=MODEL_ID,
-    body=json.dumps(payload),
-    contentType="application/json",
-    accept="application/json",
+from orchestrator.anthropic_client import create_message
+result = create_message(
+    model="claude-haiku-4-5-20251001",
+    system=system_prompt,
+    messages=messages,
+    max_tokens=2000,
 )
-result = json.loads(response["body"].read())
+text = result["text"]
+usage = result["usage"]  # {input_tokens, output_tokens, total_tokens}
 ```
+
+The wrapper raises `AnthropicConfigError` when `ANTHROPIC_API_KEY` is missing and propagates `anthropic.APIError` subclasses unchanged.
+
+### Local development
+
+Set `ANTHROPIC_API_KEY` in your shell to run agents locally or run the eval harness without AWS model permissions:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python eval/run_eval.py --label local-smoke
+```
+
+AWS credentials are still required for the Titan embedding path, DynamoDB session storage, and S3 prompt-db access.
 
 ---
 
@@ -585,7 +608,7 @@ The v2 pipeline lives alongside v1 and is reached via `POST /optimize`. Phases 1
 Every agent module exports:
 
 - `SYSTEM_PROMPT` — a template with `{format_instructions}` and (where applicable) `{reference_prompts}` / `{reference_examples}` placeholders.
-- `build_messages(...) -> tuple[list[dict], str]` — returns `(messages, system)` ready for `bedrock.invoke_model`.
+- `build_messages(...) -> tuple[list[dict], str]` — returns `(messages, system)` ready for `orchestrator.anthropic_client.create_message`.
 
 | Agent | Purpose | Uses prompt_db RAG? |
 |-------|---------|---------------------|
@@ -608,7 +631,7 @@ Every agent module exports:
 | Function | Purpose |
 |----------|---------|
 | `classify_task(user_intent)` | Keyword-based classification into one of `data_analysis`, `code_generation`, `writing`, `creative`, `web_development`, `research`, `general` |
-| `invoke_agent(agent_name, messages, system, model_id?, max_tokens=2000)` | Single Bedrock Messages-API call (Claude 3.5 Haiku by default) |
+| `invoke_agent(agent_name, messages, system, model_id?, max_tokens=2000)` | Single Anthropic API `messages.create` call (Claude Haiku 4.5 by default) via the `anthropic_client` wrapper |
 | `invoke_parallel(configs)` | `ThreadPoolExecutor` runs multiple `invoke_agent` calls concurrently; order-preserved via index-keyed dict |
 | `fetch_reference_prompts(task_category, target_model, k=3)` | Wraps `prompt_db.retrieve.retrieve_reference_prompts`; degrades to `[]` on any failure |
 | `fetch_fewshot_examples(task_category, target_model, k=2)` | Wraps `prompt_db.retrieve.retrieve_few_shot_examples` |
@@ -780,7 +803,7 @@ aws lambda add-permission \
 |----------|-------|-------------|
 | `S3_BUCKET` | `pogo-knowledge-base` | Bucket containing vector index |
 | `EMBED_MODEL_ID` | `amazon.titan-embed-text-v2:0` | Bedrock embedding model |
-| `GEN_MODEL_ID` | `us.anthropic.claude-3-5-haiku-20241022-v1:0` | Bedrock generation model |
+| `GEN_MODEL_ID` | `claude-haiku-4-5-20251001` | Anthropic API generation model (v1 path) |
 | `TOP_K` | `5` | Chunks returned by similarity search |
 
 ### Index build constants (build_index_titan.py)
