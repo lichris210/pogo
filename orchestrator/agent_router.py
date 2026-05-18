@@ -12,6 +12,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from orchestrator.anthropic_client import create_message
 
+# B4B: Critic references disabled. B4A surfaced that seeded references made
+# Critic calibration WORSE, not better — the Critic over-anchored on
+# superficial structural cues from the reference prompts (see Bug #14 in
+# PLAN_REDESIGN.md). Re-evaluate in B4C or Phase E after the Critic system
+# prompt has been validated to handle references correctly.
+ENABLE_CRITIC_REFERENCES = False
+
 # Model IDs. Defaults bumped to Anthropic API model strings (Phase B3).
 ARCHITECT_MODEL_ID = os.environ.get(
     "POGO_AGENT_MODEL_ID",
@@ -265,7 +272,10 @@ def run_critic_review(
     """Invoke the Critic with retrieved reference prompts for comparison."""
     from agents import critic
 
-    reference_prompts = fetch_reference_prompts(task_category, target_model, k=k)
+    if ENABLE_CRITIC_REFERENCES:
+        reference_prompts = fetch_reference_prompts(task_category, target_model, k=k)
+    else:
+        reference_prompts = []
     messages, system = critic.build_messages(
         final_prompt=final_prompt,
         task_category=task_category,

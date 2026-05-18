@@ -422,14 +422,12 @@ class TestCriticParseScores(unittest.TestCase):
         from agents.critic import parse_scores
         response = (
             '```json\n{"clarity": 9, "specificity": 8, "completeness": 7, '
-            '"constraint_coverage": 6, "hallucination_risk": 2, "overall": 8, '
-            '"techniques_identified": ["role_assignment", "few_shot"]}\n```\n'
+            '"constraint_coverage": 6, "hallucination_risk": 2, "overall": 8}\n```\n'
             "Solid prompt overall."
         )
         scores = parse_scores(response)
         self.assertEqual(scores["clarity"], 9)
         self.assertEqual(scores["overall"], 8)
-        self.assertEqual(scores["techniques_identified"], ["role_assignment", "few_shot"])
 
     def test_parse_scores_regex_fallback_when_no_json(self):
         from agents.critic import parse_scores
@@ -446,8 +444,6 @@ class TestCriticParseScores(unittest.TestCase):
         # Missing keys default to -1.
         self.assertEqual(scores["constraint_coverage"], -1)
         self.assertEqual(scores["hallucination_risk"], -1)
-        # No techniques mentioned anywhere → empty list.
-        self.assertEqual(scores["techniques_identified"], [])
 
     def test_parse_scores_invalid_json_falls_back_to_regex(self):
         """Malformed JSON should not crash; regex pass picks up loose values."""
@@ -459,6 +455,91 @@ class TestCriticParseScores(unittest.TestCase):
         scores = parse_scores(response)
         self.assertEqual(scores["clarity"], 5)
         self.assertEqual(scores["overall"], 5)
+
+    def test_parse_scores_handles_legacy_techniques_field(self):
+        """Older captures may include a ``techniques_identified`` field.
+
+        B4B removed the field from the system-prompt schema. ``parse_scores``
+        must tolerate its presence in legacy responses without crashing.
+        Design choice: the field is silently dropped from the returned dict
+        (not surfaced), since downstream consumers no longer read it.
+        """
+        from agents.critic import parse_scores
+        response = (
+            '```json\n{"clarity": 8, "specificity": 7, "completeness": 9, '
+            '"constraint_coverage": 6, "hallucination_risk": 3, "overall": 8, '
+            '"techniques_identified": ["role_assignment", "few_shot"]}\n```\n'
+            "Legacy-format response from a captured run."
+        )
+        scores = parse_scores(response)
+        self.assertEqual(scores["clarity"], 8)
+        self.assertEqual(scores["overall"], 8)
+        self.assertNotIn("techniques_identified", scores)
+
+
+class TestCriticSystemPrompt(unittest.TestCase):
+    """B4B contract: Critic system prompt no longer rewards self-advertised
+    structure (techniques_identified removed), has an INPUT HYGIENE section
+    that names pipeline-leakage defects, and a HARD RULE capping
+    Completeness when required sections are missing."""
+
+    def test_critic_system_prompt_omits_techniques_identified(self):
+        from agents.critic import SYSTEM_PROMPT
+        json_start = SYSTEM_PROMPT.find("```json")
+        json_end = SYSTEM_PROMPT.find("```", json_start + len("```json"))
+        self.assertGreater(json_start, -1, "JSON schema block missing")
+        schema = SYSTEM_PROMPT[json_start:json_end]
+        self.assertNotIn("techniques_identified", schema)
+
+    def test_critic_system_prompt_has_input_hygiene_section(self):
+        from agents.critic import SYSTEM_PROMPT
+        self.assertIn("INPUT HYGIENE", SYSTEM_PROMPT)
+        markers = [
+            "chain-of-thought preamble",
+            "<thinking>",
+            "Techniques Used:",
+            "raw input data",
+        ]
+        present = sum(1 for m in markers if m.lower() in SYSTEM_PROMPT.lower())
+        self.assertGreaterEqual(present, 3, f"Only {present}/4 hygiene markers present")
+
+    def test_critic_system_prompt_has_section_presence_hard_rule(self):
+        from agents.critic import SYSTEM_PROMPT
+        self.assertIn("HARD RULE", SYSTEM_PROMPT)
+        self.assertIn("Completeness", SYSTEM_PROMPT)
+        self.assertIn("3/10", SYSTEM_PROMPT)
+
+
+class TestCriticReferenceFlag(unittest.TestCase):
+    """B4B: ``ENABLE_CRITIC_REFERENCES`` gates ``fetch_reference_prompts``
+    in the Critic call path. Default is off; flag-flipped tests cover the
+    on-path."""
+
+    def test_critic_references_disabled_by_default(self):
+        from orchestrator import agent_router
+        self.assertIs(agent_router.ENABLE_CRITIC_REFERENCES, False)
+
+        critic_text = (
+            '```json\n{"clarity": 5, "specificity": 5, "completeness": 5, '
+            '"constraint_coverage": 5, "hallucination_risk": 5, "overall": 5}\n```'
+        )
+        with patch(
+            "orchestrator.agent_router.fetch_reference_prompts",
+            return_value=["[id=ref ...]"],
+        ) as mock_refs, patch(
+            "orchestrator.agent_router.invoke_agent",
+            return_value=critic_text,
+        ):
+            from agents.format_profiles import FORMAT_PROFILES
+            result = agent_router.run_critic_review(
+                final_prompt="some prompt",
+                task_category="code_generation",
+                format_profile=FORMAT_PROFILES["claude"],
+                target_model="claude",
+            )
+
+        mock_refs.assert_not_called()
+        self.assertEqual(result["reference_prompts"], [])
 
 
 class TestAgentRouterHelpers(unittest.TestCase):
@@ -539,20 +620,25 @@ class TestAgentRouterHelpers(unittest.TestCase):
         self.assertIn("You are a developer.", block)
         self.assertIn("Build {{X}}.", block)
 
-    def test_run_critic_review_injects_references_and_parses(self):
-        """run_critic_review wires references → critic → parsed scores."""
+    def test_run_critic_review_wires_critic_and_parses(self):
+        """run_critic_review wires critic → parsed scores and suggestions.
+
+        References are disabled by default in B4B (see
+        ``ENABLE_CRITIC_REFERENCES``); this test flips the flag on to
+        exercise the original wiring. Default-off behavior is covered in
+        ``TestCriticReferenceFlag``.
+        """
         from orchestrator import agent_router
 
         critic_text = (
             '```json\n{"clarity": 8, "specificity": 7, "completeness": 9, '
-            '"constraint_coverage": 6, "hallucination_risk": 3, "overall": 8, '
-            '"techniques_identified": ["role_assignment"]}\n```\n'
+            '"constraint_coverage": 6, "hallucination_risk": 3, "overall": 8}\n```\n'
             "Good prompt overall.\n"
             "Suggestions:\n"
             "1. Add a JSON schema.\n"
             "2. Specify failure handling.\n"
         )
-        with patch(
+        with patch.object(agent_router, "ENABLE_CRITIC_REFERENCES", True), patch(
             "orchestrator.agent_router.fetch_reference_prompts",
             return_value=["[id=ref_1 ...]"],
         ) as mock_refs, patch(
