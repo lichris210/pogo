@@ -67,6 +67,123 @@ class TestRunEntryCapture(unittest.TestCase):
         self.assertTrue(result.final_output)
         self.assertGreater(result.elapsed_seconds, 0)
 
+    def test_overload_triggers_retry_with_backoff(self):
+        """B4C: Anthropic overload (HTTP 529 / InternalServerError) retries
+        with exponential backoff, then returns the successful capture.
+
+        Other Anthropic error classes (auth, bad-request) do NOT retry —
+        they pass through to the per-entry skip path on the first attempt.
+        """
+        import anthropic
+        import httpx
+        entry = {
+            "id": "eval_overload",
+            "task_category": "code_generation",
+            "target_model_family": "claude",
+            "expected_path": "one_shot",
+            "user_prompt": "Write a Python add function.",
+            "pre_baked_context": "Use type hints.",
+            "notes": "overload-retry",
+        }
+
+        # Build a real InternalServerError instance (the SDK's 5xx class,
+        # which is what surfaces a 529 overload).
+        fake_response = httpx.Response(
+            status_code=529,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+        overload_exc = anthropic.InternalServerError(
+            message="overloaded_error",
+            response=fake_response,
+            body={"error": {"type": "overloaded_error"}},
+        )
+
+        call_log = []
+
+        def flaky_pipeline(user_prompt, pre_baked, target_model):
+            call_log.append("attempt")
+            if len(call_log) < 3:
+                raise overload_exc
+            return run_eval.CaptureResult(
+                architect_draft="ok",
+                final_output="done",
+                critic_score=0.5,
+                critic_feedback="fine",
+            )
+
+        sleep_log: list[float] = []
+
+        with patch("eval.run_eval._drive_pipeline", side_effect=flaky_pipeline):
+            result = run_eval.run_entry(
+                entry,
+                sleep_fn=sleep_log.append,
+                backoffs=(1, 2, 4),
+            )
+
+        self.assertFalse(result.skipped, msg=f"unexpected skip: {result.skip_reason}")
+        self.assertIsNone(result.error)
+        self.assertEqual(result.architect_draft, "ok")
+        self.assertEqual(len(call_log), 3)  # 2 overloads + 1 success
+        self.assertEqual(sleep_log, [1, 2])  # slept before retries 2 and 3
+        self.assertEqual(result.extra.get("overload_retries"), 2)
+
+    def test_overload_exhausted_skips_with_clear_reason(self):
+        """All overload retries fail → skip with a reason that names the cause."""
+        import anthropic
+        import httpx
+        entry = {
+            "id": "eval_overload_fail",
+            "task_category": "code_generation",
+            "target_model_family": "claude",
+            "expected_path": "one_shot",
+            "user_prompt": "x",
+            "pre_baked_context": "y",
+        }
+        fake_response = httpx.Response(
+            status_code=529,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+        overload_exc = anthropic.InternalServerError(
+            message="overloaded_error",
+            response=fake_response,
+            body=None,
+        )
+        with patch("eval.run_eval._drive_pipeline", side_effect=overload_exc):
+            result = run_eval.run_entry(
+                entry,
+                sleep_fn=lambda _: None,
+                backoffs=(0, 0, 0),
+            )
+        self.assertTrue(result.skipped)
+        self.assertIn("overload", result.skip_reason.lower())
+        self.assertIn("InternalServerError", result.error)
+
+    def test_non_overload_api_error_does_not_retry(self):
+        """Auth/bad-request/etc. fail immediately on the first attempt."""
+        entry = {
+            "id": "eval_bad_request",
+            "task_category": "code_generation",
+            "target_model_family": "claude",
+            "expected_path": "one_shot",
+            "user_prompt": "x",
+            "pre_baked_context": "y",
+        }
+        call_count = {"n": 0}
+
+        def explode(user_prompt, pre_baked, target_model):
+            call_count["n"] += 1
+            raise ValueError("synthetic non-retryable failure")
+
+        with patch("eval.run_eval._drive_pipeline", side_effect=explode):
+            result = run_eval.run_entry(
+                entry,
+                sleep_fn=lambda _: None,
+                backoffs=(0, 0, 0),
+            )
+        self.assertTrue(result.skipped)
+        self.assertEqual(call_count["n"], 1)
+        self.assertIn("ValueError", result.error)
+
     def test_unknown_target_model_family_is_logged_not_raised(self):
         entry = {
             "id": "eval_x",

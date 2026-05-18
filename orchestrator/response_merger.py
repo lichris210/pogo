@@ -14,6 +14,7 @@ def merge_draft_scout_clarifier(
     prompt_format: str,
 ) -> dict[str, Any]:
     """Merge the initial draft, context suggestions, and clarifying questions."""
+    draft_response = strip_architect_preamble(draft_response)
     prompt_text = _extract_prompt_block(draft_response)
     techniques = _extract_after(draft_response, "Techniques Used")
 
@@ -73,6 +74,8 @@ def merge_refinement(
     prompt_format: str,
 ) -> dict[str, Any]:
     """Merge a refined prompt with few-shot examples and guardrail results."""
+    refined_prompt = strip_architect_preamble(refined_prompt)
+    fewshot_response = strip_fewshot_preamble(fewshot_response)
     prompt_text = _extract_prompt_block(refined_prompt)
     techniques = _extract_after(refined_prompt, "Techniques Used")
 
@@ -357,24 +360,71 @@ def _extract_after(text: str, heading: str) -> str:
     return ""
 
 
-def _strip_preamble(text: str) -> str:
-    """Strip any chain-of-thought or preamble before the first numbered item.
+_ARCHITECT_PREAMBLE_MARKERS = (
+    r"```",                       # fenced prompt body
+    r"<role\b",
+    r"<context\b",
+    r"<task\b",
+    r"<constraints\b",
+    r"<instructions\b",
+    r"<system\b",
+    r"(?im)^\s*##+\s*role\b",
+    r"(?im)^\s*##+\s*context\b",
+    r"(?im)^\s*##+\s*task\b",
+    r"(?im)^\s*##+\s*constraints\b",
+    r"(?im)^\s*role\s*:",
+    r"(?im)^\s*system\s*:",
+    r"(?im)^you\s+are\b",
+)
 
-    Some agents (Clarifier, Context Scout) occasionally emit reasoning or a
-    conversational lead-in before their numbered list. The output contract is
-    "numbered list only", so anything before the first ``\\n1.`` (or initial
-    ``1.``) is discarded. If no numbered list is present, the text is returned
-    unchanged so non-list outputs still surface.
+_FEWSHOT_PREAMBLE_MARKERS = (
+    r"(?im)^example\s+\d+",
+)
+
+
+def _strip_preamble(text: str, *, markers: tuple[str, ...] | None = None) -> str:
+    """Strip chain-of-thought or preamble before the first structured marker.
+
+    Default behaviour (legacy): strip before the first numbered list item
+    ``1.`` — used for Clarifier and Context Scout, whose contract is
+    "numbered list only".
+
+    With *markers* supplied, the earliest match among any pattern is used
+    as the cut point. Used to defensively strip Architect (bug #16) and
+    Few-Shot Generator (bug #10) preambles. If no marker matches, the text
+    is returned unchanged so non-conforming outputs still surface for
+    downstream diagnosis rather than being silently dropped.
     """
     if not text:
         return text
-    m = re.search(r"(?:^|\n)\s*1\.\s+", text)
-    if not m:
+
+    if markers is None:
+        m = re.search(r"(?:^|\n)\s*1\.\s+", text)
+        if not m:
+            return text
+        start = m.start()
+        if text[start] == "\n":
+            start += 1
+        return text[start:].lstrip()
+
+    earliest: int | None = None
+    for pattern in markers:
+        m = re.search(pattern, text)
+        if m and (earliest is None or m.start() < earliest):
+            earliest = m.start()
+    if earliest is None:
         return text
-    start = m.start()
-    if text[start] == "\n":
-        start += 1
-    return text[start:].lstrip()
+    return text[earliest:].lstrip()
+
+
+def strip_architect_preamble(text: str) -> str:
+    """Strip CoT/preamble that appears before the Architect's structured body."""
+    return _strip_preamble(text, markers=_ARCHITECT_PREAMBLE_MARKERS)
+
+
+def strip_fewshot_preamble(text: str) -> str:
+    """Strip CoT/preamble that appears before the first ``Example N`` block."""
+    return _strip_preamble(text, markers=_FEWSHOT_PREAMBLE_MARKERS)
 
 
 def _extract_list_items(text: str) -> list[str]:
