@@ -25,7 +25,9 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase B1.** Test backfill for original Phases 6–7 — completed 2026-05-12, commit `5a573ce`, branch `claude/pogo-v2-phase-b1-k3205`
 - [x] **Phase B2.** Build eval harness — harness built 2026-05-13, commit `4201783`, branch `claude/pogo-v2-phase-b2-2SIti`. Baseline capture deferred to post-B3 (AWS credentials gap in Claude Code sandbox).
 - [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`). Smoke test ran 2026-05-14 (commit `391a012`). Full v2 baseline captured and rated 2026-05-14 (commit `1681158`).
-- [ ] **Phase B4.** Baseline Restoration — prompt DB seeding, fix bugs #10–14, Critic decontamination + calibration test, B3 closure verification, re-baseline. **Next to draft.**
+- [x] **Phase B4A.** Spot captures + Critic regression detection — completed 2026-05-18, commit `f5b323a`. Bug #16 (Architect CoT leak) logged; Bug #15 surfaced; Critic-with-seeded-references found to be *more* lenient than without (Bug #14 update).
+- [x] **Phase B4B.** Critic decontamination + reference disable (Bug #14 mitigation) — completed 2026-05-18, branch `claude/phase-b4b-decontamination-khFef`.
+- [ ] **Phase B4C.** Bug fixes #10, #11, #12, #13, #16 + Few-Shot Generator system prompt rewrite for placeholder enforcement (Bug #13 follow-through). Pending B4B spot-check validation.
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -151,6 +153,55 @@ The Critic's bias has a specific shape, not uniform generosity. It agrees with h
 
 Bugs surfaced or sharpened by the rating pass: bugs #11, #12, #13 (already known from smoke test), plus the new Critic miscalibration finding (logged as bug #14). Details in the Known Issues section below.
 
+**2026-05-18 — Phase B4A complete (commit `f5b323a`)**
+
+Spot-check captures of three eval entries (eval_001, eval_007, eval_011) after seeding the prompt DB, to test whether seeded references improved Critic calibration on outputs known to be broken. Capture at `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`.
+
+**Critic-score deltas (seeded references vs. v2 baseline):**
+
+| eval_id | v2 baseline critic | B4A (refs seeded) critic | Δ | Human (baseline) |
+|---|---|---|---|---|
+| eval_001 | 0.10 | 0.60 | +0.50 | 1 |
+| eval_007 | 0.70 | 0.90 | +0.20 | 2 |
+| eval_011 | 0.10 | 0.80 | +0.70 | 1 |
+
+**Finding: Critic with seeded references is *more* lenient, not more calibrated.** Every spot-check entry scored higher despite the underlying output still being structurally broken (eval_001 missing Architect sections entirely; eval_007 with Architect CoT preamble leak; eval_011 with all six sections missing). The Critic over-anchored on superficial structural cues from the reference prompts rather than penalizing defects in the candidate. Logged as a Bug #14 update.
+
+**Bugs surfaced or sharpened:**
+- Bug #15 — `few_shot_examples` field is empty across all 139 seed records; retrieval always returns 0. Seeding does not actually feed the Few-Shot Generator. Invalidates one of B4A's premises.
+- Bug #16 — Architect CoT preamble leak (visible in eval_007's `final_output`).
+
+**Decision:** Split Phase B4 into A/B/C. B4B addresses the Critic decontamination in isolation (system-prompt rewrite + reference disable feature flag), B4C handles the bug fixes (#10–13, #16) plus the Few-Shot system prompt rewrite. Sequencing prevents conflating the Critic signal with the bug-fix signal.
+
+**2026-05-18 — Phase B4B complete (commit `<FILL_IN>`, branch `claude/phase-b4b-decontamination-khFef`)**
+
+Critic decontamination + reference disable, the Bug #14 mitigation flagged by B4A.
+
+Changes:
+- `agents/critic.py` — `SYSTEM_PROMPT` rewritten:
+  - Opening evidence-framing line: now instructs the Critic to "prioritize naming [defects] over finding compensating positives" instead of "cite the exact part of the prompt that justifies each rating" (which was rewarding surface evidence in broken output).
+  - New `=== INPUT HYGIENE ===` section enumerates pipeline-leakage defects (CoT preamble, `<thinking>` tags, "Techniques Used:" blocks, raw input data leakage, placeholder section markers) and prescribes Clarity/Completeness penalties.
+  - Completeness dimension now carries a HARD RULE capping the score at 3/10 when any of `<role>`/`<context>`/`<task>`/`<constraints>` is missing, 0/10 when all four are missing.
+  - `techniques_identified` field removed from the output JSON schema.
+- `agents/critic.py::parse_scores` — no longer extracts `techniques_identified`. Tolerates the field's presence in legacy captures without crashing (silently drops it). `_extract_techniques` helper retained for backward compatibility.
+- `orchestrator/agent_router.py` — added module-level `ENABLE_CRITIC_REFERENCES = False` constant. `run_critic_review` gates `fetch_reference_prompts` behind the flag; other callers of `fetch_reference_prompts` (the Architect's reference retrieval path) are unaffected.
+- `tests/test_orchestrator.py`:
+  - Updated `TestCriticParseScores.test_parse_scores_json_block` and `test_parse_scores_regex_fallback_when_no_json` to no longer assert on `techniques_identified` (the field was removed from the schema).
+  - Renamed/repurposed `test_run_critic_review_injects_references_and_parses` → `test_run_critic_review_wires_critic_and_parses`. The test now flips the flag on locally to exercise the original wiring.
+  - Added 5 new tests: `test_parse_scores_handles_legacy_techniques_field`, `test_critic_system_prompt_omits_techniques_identified`, `test_critic_system_prompt_has_input_hygiene_section`, `test_critic_system_prompt_has_section_presence_hard_rule`, `test_critic_references_disabled_by_default`.
+
+Test count: 195 → **200** (added 5 tests across `TestCriticParseScores`, new `TestCriticSystemPrompt`, new `TestCriticReferenceFlag`).
+
+**Explicitly deferred to B4C:** bugs #10, #11, #12, #13, #16 plus the Few-Shot Generator system prompt rewrite. Rationale: fixing Critic and bugs simultaneously would conflate the Critic-decontamination signal with the bug-fix signal. The Critic should now penalize the (still structurally broken) eval_001 / eval_007 / eval_011 outputs; the user runs the same B4A 3-entry spot check locally against `/tmp/b4a-subset.json` to validate before merging.
+
+**Validation command (user runs locally with `ANTHROPIC_API_KEY` set):**
+
+```
+python eval/run_eval.py --inputs /tmp/b4a-subset.json --label b4b-critic-decontaminated
+```
+
+Expected: eval_001's `critic_score` should drop from 0.60 toward <0.30; eval_007 should drop meaningfully from 0.90; eval_011 should drop substantially from 0.80.
+
 ---
 
 ## Known Issues (to address in Phase B4)
@@ -186,6 +237,8 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Shape (from baseline rating):* agreement on the extremes (worst and best outputs), miscalibration in the middle. When output has any structure at all (including leaked CoT or self-contradictory examples), the Critic rates 0.7+.
 - *Concrete cost:* 5 of 18 baseline entries (28%) cross the 0.8 auto-ingest threshold while humans rate them ≤ 2. Seeding the DB and enabling auto-ingest before fixing this would poison the DB.
 - *Likely cause:* The Critic system prompt (`agents/critic.py`) asks for `techniques_identified` and instructs the model to "cite the exact part of the prompt that justifies each rating." Leaked CoT, "Techniques Used:" sections, and other meta-commentary from upstream agents are read as evidence of quality. The Critic has no defense against pipeline leakage.
+- *B4A update (2026-05-18):* Seeding the DB and exposing reference prompts to the Critic made calibration **worse**, not better. Spot-check captures of eval_001 / eval_007 / eval_011 each scored higher with seeded references (deltas +0.50 / +0.20 / +0.70) despite the underlying outputs remaining structurally broken. The Critic over-anchors on superficial structural cues from the references rather than penalizing defects.
+- *B4B mitigation landed (commit `<FILL_IN>`):* `techniques_identified` removed from system prompt; `=== INPUT HYGIENE ===` section added enumerating pipeline-leakage defects; HARD RULE added capping Completeness at 3/10 when required sections are missing; evidence-framing line rewritten to prioritize defects over compensating positives; reference prompts disabled via `ENABLE_CRITIC_REFERENCES = False` feature flag in `orchestrator/agent_router.py`. Awaiting spot-check validation against `/tmp/b4a-subset.json`.
 - *Severity:* critical for the auto-ingest flywheel.
 
 **Bug #15 — Few-Shot Generator retrieval blocked by empty `few_shot_examples` field in seed data.**

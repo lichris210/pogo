@@ -13,8 +13,21 @@ from agents.format_profiles import get_format_instructions
 
 SYSTEM_PROMPT = """\
 You are the Critic — you evaluate prompt quality with precision and \
-specificity. Your scores must be evidence-based: cite the exact part of \
-the prompt that justifies each rating.
+specificity. Your scores must be evidence-based: cite specific defects \
+or strengths in the prompt. When defects are present, prioritize naming \
+them over finding compensating positives.
+
+=== INPUT HYGIENE ===
+
+Before scoring, check the prompt for pipeline leakage. Treat the following as DEFECTS and penalize them:
+
+- Chain-of-thought preamble at the top of the output (e.g., "I'll generate...", "Let me think about...", "Here's an updated version:", "I'll refine the prompt based on...")
+- Tags exposing reasoning: <thinking>, <analysis>, <scratchpad>
+- "Techniques Used:" or similar self-advertising blocks
+- Raw input data leaking into the output (e.g., a CSV from the user's request appearing in the prompt body)
+- Section markers that contain placeholder text from the agent rather than substantive content
+
+When these appear, reduce Clarity (-3 to -5) and Completeness (-2 to -4). Name the specific defect in your explanation. Do not score these as positives even if they look "structured."
 
 === SCORING DIMENSIONS ===
 
@@ -31,6 +44,8 @@ Rate each dimension from 0 to 10:
 3. Completeness (0-10)
    Does the prompt cover role, context, task, constraints, and output format?
    10 = all sections present and thorough; 0 = critical sections missing.
+
+   HARD RULE: If ANY of <role>, <context>, <task>, or <constraints> is missing from the prompt, Completeness MUST be capped at 3/10. If all four are missing, Completeness MUST be 0/10. This rule overrides any other consideration.
 
 4. Constraint Coverage (0-10)
    Are edge cases, fallback behavior, length limits, and forbidden actions \
@@ -58,8 +73,7 @@ Return your evaluation as a JSON block followed by prose.
   "completeness": <int>,
   "constraint_coverage": <int>,
   "hallucination_risk": <int>,
-  "overall": <int>,
-  "techniques_identified": ["<technique_1>", "<technique_2>", ...]
+  "overall": <int>
 }}
 ```
 
@@ -124,12 +138,18 @@ def parse_scores(response: str) -> dict:
 
     Looks for a JSON code block first, then falls back to regex extraction.
 
+    The ``techniques_identified`` field was removed from the system-prompt
+    schema in Phase B4B (it rewarded prompts that self-advertised structure,
+    which contributed to Critic miscalibration — see Bug #14 in
+    PLAN_REDESIGN.md). Older captures may still contain the field; this
+    parser tolerates it without crashing but does not surface it in the
+    returned dict.
+
     Args:
         response: The raw text response from the Critic agent.
 
     Returns:
-        A dict with keys from :data:`SCORE_KEYS` mapped to ``int`` values,
-        plus ``"techniques_identified"`` (list of str) if present.
+        A dict with keys from :data:`SCORE_KEYS` mapped to ``int`` values.
         Missing keys default to ``-1``.
     """
     scores: dict = {}
@@ -142,8 +162,6 @@ def parse_scores(response: str) -> dict:
             for key in SCORE_KEYS:
                 if key in parsed:
                     scores[key] = int(parsed[key])
-            if "techniques_identified" in parsed:
-                scores["techniques_identified"] = parsed["techniques_identified"]
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -155,13 +173,9 @@ def parse_scores(response: str) -> dict:
             if m:
                 scores[key] = int(m.group(1))
 
-    if not scores.get("techniques_identified"):
-        scores["techniques_identified"] = _extract_techniques(response)
-
     # Fill missing keys with -1
     for key in SCORE_KEYS:
         scores.setdefault(key, -1)
-    scores.setdefault("techniques_identified", [])
 
     return scores
 
