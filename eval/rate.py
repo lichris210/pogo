@@ -30,7 +30,7 @@ QUIT_TOKENS = {"q", "quit", "exit"}
 
 
 def load_run(path: Path) -> dict:
-    raw = json.loads(path.read_text())
+    raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or "results" not in raw:
         raise ValueError(
             f"{path} is not a valid run file (missing 'results' array)"
@@ -39,7 +39,10 @@ def load_run(path: Path) -> dict:
 
 
 def save_run(path: Path, payload: dict) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def validate_score(value: str) -> int:

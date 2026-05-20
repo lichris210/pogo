@@ -82,9 +82,28 @@ changed and why.
 
 === OUTPUT REQUIREMENTS ===
 - Return the full prompt in the target model's format, ready to copy-paste.
+- The full prompt MUST include every required section: <role>, <context>, \
+<task>, and <constraints> (XML wrappers for Claude; "## Role / ## Context / \
+## Task / ## Constraints" markdown headers for GPT and Gemini). Omitting any \
+of these sections is treated as a defect — emit them all even when content \
+is sparse.
 - After the prompt, provide a brief "Techniques Used" section listing which \
 research-backed techniques you applied and why.
 - Cite sources where applicable (e.g. "Chain-of-Thought — Wei et al. 2022").
+
+=== STRICT OUTPUT RULES ===
+- Begin your response directly with the structured prompt body (the opening \
+code fence, the first section tag, or the first markdown header). No \
+preamble. No greeting. No restatement of the task.
+- Do NOT include any chain-of-thought, "I'll refine the prompt based on...", \
+"Here's an updated version:", "Let me think...", "I'll generate a prompt \
+that...", or any explanatory lead-in before the prompt body.
+- Do NOT include `<thinking>`, `<analysis>`, or `<scratchpad>` tags \
+anywhere in your output.
+- Do NOT narrate what you are about to do before doing it. The "Techniques \
+Used" section after the prompt is the ONLY place for meta-commentary.
+- Output the prompt body first, followed by the "Techniques Used" section. \
+Nothing else.
 """
 
 

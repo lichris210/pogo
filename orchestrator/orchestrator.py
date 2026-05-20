@@ -29,10 +29,13 @@ from orchestrator.agent_router import (
 )
 from orchestrator.live_test import run_live_test
 from orchestrator.response_merger import (
+    _extract_prompt_block,
     format_accepted,
     merge_draft_scout_clarifier,
     merge_refinement,
     merge_review,
+    strip_architect_preamble,
+    strip_fewshot_preamble,
 )
 from orchestrator.session import (
     Session,
@@ -122,6 +125,101 @@ def handle_message(event: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Architect output validation (Bug #12)
+# ---------------------------------------------------------------------------
+
+REQUIRED_ARCHITECT_SECTIONS = ("role", "context", "task", "constraints")
+
+
+class ArchitectOutputError(RuntimeError):
+    """Raised when the Architect produces an unusable prompt after a retry.
+
+    "Unusable" means one or more of <role>/<context>/<task>/<constraints>
+    is missing from the extracted prompt body. Bug #12 (PLAN_REDESIGN.md)
+    used to manifest as the orchestrator silently dropping the Architect
+    output; this exception makes the failure observable so the eval
+    runner / Lambda handler can surface it instead.
+    """
+
+
+def _missing_architect_sections(prompt_text: str, target_model: str) -> list[str]:
+    """Return any of REQUIRED_ARCHITECT_SECTIONS not detected in the prompt body."""
+    if not prompt_text:
+        return list(REQUIRED_ARCHITECT_SECTIONS)
+
+    profile = format_profiles.FORMAT_PROFILES.get(target_model, {})
+    wrapper = profile.get("wrapper_format", "markdown")
+
+    missing: list[str] = []
+    for section in REQUIRED_ARCHITECT_SECTIONS:
+        if wrapper == "xml":
+            present = re.search(rf"<{section}\b", prompt_text, re.IGNORECASE)
+        else:
+            present = re.search(
+                rf"(?im)^\s*#+\s*{section}\b", prompt_text
+            ) or re.search(rf"<{section}\b", prompt_text, re.IGNORECASE)
+        if not present:
+            missing.append(section)
+    return missing
+
+
+def _invoke_architect_with_validation(
+    arch_msgs: list[dict],
+    arch_sys: str,
+    target_model: str,
+) -> tuple[str, str]:
+    """Invoke the Prompt Architect and validate the output has every required section.
+
+    Retries the Architect call once with a stricter instruction when the
+    first response is missing any of <role>, <context>, <task>, or
+    <constraints>. Raises :class:`ArchitectOutputError` if both attempts
+    produce a structurally incomplete prompt.
+
+    Returns:
+        ``(raw_response, extracted_prompt_body)``. The raw response is
+        what the merger needs (for "Techniques Used" extraction); the
+        prompt body is what gets stored as ``session.current_draft``.
+    """
+    raw = invoke_agent("prompt_architect", arch_msgs, arch_sys)
+    cleaned = strip_architect_preamble(raw)
+    prompt_text = _extract_prompt_block(cleaned)
+    missing = _missing_architect_sections(prompt_text, target_model)
+    if not missing:
+        return raw, prompt_text
+
+    print(
+        f"[orchestrator] Architect output missing sections "
+        f"{missing}; retrying once with stricter instruction."
+    )
+
+    addendum = (
+        "Your previous output was missing required sections: "
+        f"{', '.join(missing)}. Emit the FULL prompt again with EVERY "
+        "required section present and labelled correctly: "
+        "<role>, <context>, <task>, <constraints> (XML wrappers for "
+        "Claude, '## Role' / '## Context' / '## Task' / '## Constraints' "
+        "markdown headers for GPT and Gemini). Do NOT include any preamble, "
+        "chain-of-thought, or commentary before the prompt body."
+    )
+
+    retry_msgs = list(arch_msgs) + [
+        {"role": "assistant", "content": [{"type": "text", "text": raw}]},
+        {"role": "user", "content": [{"type": "text", "text": addendum}]},
+    ]
+    raw2 = invoke_agent("prompt_architect", retry_msgs, arch_sys)
+    cleaned2 = strip_architect_preamble(raw2)
+    prompt_text2 = _extract_prompt_block(cleaned2)
+    missing2 = _missing_architect_sections(prompt_text2, target_model)
+    if missing2:
+        raise ArchitectOutputError(
+            "Prompt Architect produced an incomplete prompt after one "
+            f"retry. Missing sections (target={target_model}): {missing2}. "
+            "This used to be silently dropped (see Bug #12 in PLAN_REDESIGN.md)."
+        )
+    return raw2, prompt_text2
+
+
+# ---------------------------------------------------------------------------
 # State handlers
 # ---------------------------------------------------------------------------
 
@@ -149,11 +247,12 @@ def _handle_initial(session: Session, message: str) -> dict:
         format_profile=profile,
         reference_prompts=reference_prompts,
     )
-    draft_response = invoke_agent("prompt_architect", arch_msgs, arch_sys)
+    draft_response, prompt_body = _invoke_architect_with_validation(
+        arch_msgs, arch_sys, session.target_model
+    )
 
     # 3. Extract draft for session
-    from orchestrator.response_merger import _extract_prompt_block
-    session.current_draft = _extract_prompt_block(draft_response)
+    session.current_draft = prompt_body
 
     # 4. Scout + Clarifier in parallel
     scout_msgs, scout_sys = context_scout.build_messages(
@@ -216,7 +315,15 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
         reference_prompts=reference_prompts,
     )
 
-    # 2. Few-Shot Generator in parallel (with reference examples from the DB)
+    # 2. Architect refine FIRST (Bug #11: Few-Shot must consume the REFINED
+    #    draft, not the stale pre-refine one). Validate sections; retry once
+    #    if anything's missing (Bug #12).
+    refined_response, refined_body = _invoke_architect_with_validation(
+        arch_msgs, arch_sys, session.target_model
+    )
+    session.current_draft = refined_body
+
+    # 3. Few-Shot Generator runs AFTER the Architect, with the refined draft.
     reference_examples = fetch_fewshot_examples(
         session.task_category, session.target_model, k=2
     )
@@ -226,15 +333,8 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
         format_profile=profile,
         reference_examples=reference_examples,
     )
-
-    refined_response, fewshot_response = invoke_parallel([
-        {"agent_name": "prompt_architect", "messages": arch_msgs, "system": arch_sys},
-        {"agent_name": "fewshot_generator", "messages": fs_msgs, "system": fs_sys},
-    ])
-
-    # 3. Update draft
-    from orchestrator.response_merger import _extract_prompt_block
-    session.current_draft = _extract_prompt_block(refined_response)
+    fewshot_response = invoke_agent("fewshot_generator", fs_msgs, fs_sys)
+    fewshot_response = strip_fewshot_preamble(fewshot_response)
     session.fewshot_examples = fewshot_response.strip()
 
     # 4. Guardrails
@@ -303,11 +403,12 @@ def _handle_iterating(
         },
         format_profile=profile,
     )
-    refined_response = invoke_agent("prompt_architect", arch_msgs, arch_sys)
+    refined_response, refined_body = _invoke_architect_with_validation(
+        arch_msgs, arch_sys, session.target_model
+    )
 
     # 2. Update draft
-    from orchestrator.response_merger import _extract_prompt_block
-    session.current_draft = _extract_prompt_block(refined_response)
+    session.current_draft = refined_body
     session.fewshot_examples = ""
 
     # 3. Guardrails

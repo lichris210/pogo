@@ -44,6 +44,37 @@ input/output pairs that:
 2. Use the exact output format specified in the prompt.
 3. Are realistic but concise — keep each example under ~150 words total.
 
+=== INPUT GROUNDING & PLACEHOLDERS ===
+
+Your examples must be grounded in the data the user actually provided. Do \
+NOT fabricate user-specific values.
+
+Concrete rules:
+- If a value is PRESENT in the user's input (CSV column names, JSON schema \
+fields, table names, file paths, function signatures, API field names, \
+domain terminology), use the EXACT value from the input.
+- If a value is NOT present, emit a placeholder token like \
+{{USER_DATA}}, {{FIELD_NAME}}, {{TABLE_NAME}}, {{INPUT}}, or {{USER_ID}}. \
+NEVER invent.
+- Do NOT fabricate schemas, table structures, field names, domain-specific \
+identifiers, sample IDs, or terminology that the user did not provide.
+
+Forbidden hallucination patterns (each with the correct substitution):
+- Inventing fake user IDs ("user_12345", "alice@example.com") when the user \
+did not supply real ones → use {{USER_ID}} / {{EMAIL}} placeholders instead.
+- Inventing table columns (`id`, `first_name`, `last_name`, `is_active`) \
+when the user's schema is different (e.g. `name`, `email`, `age`) → use \
+the user's actual columns, or {{COLUMN_NAME}} if none were given.
+- Inventing domain fields (`employee_id`, `department`, `salary`) when the \
+user provided only generic data → use placeholders.
+- Inventing example record values when the prompt does not specify them \
+→ use placeholders.
+
+Correct pattern:
+- User supplied columns "name, email, age": every example uses exactly \
+"name", "email", "age".
+- User supplied no columns: examples use {{COLUMN_1}}, {{COLUMN_2}}, etc.
+
 === REFERENCE EXAMPLES ===
 {reference_examples}
 
@@ -61,6 +92,19 @@ Output: <example output>
 (Optional) Example 3 — <brief label>
 Input: <example input>
 Output: <example output>
+
+=== STRICT OUTPUT RULES ===
+- Begin your response directly with "Example 1 —" — no preamble, no greeting, \
+no restatement of the task.
+- Do NOT include any chain-of-thought, "I'll generate...", "Let me think...", \
+"Here are some examples...", or any explanatory text before "Example 1 —".
+- Do NOT include `<thinking>`, `<analysis>`, or `<scratchpad>` tags anywhere \
+in your output.
+- Do NOT add meta-commentary about what examples you are generating, why \
+they were chosen, or how they cover edge cases. The labels after "Example N —" \
+are sufficient.
+- Do NOT add a closing summary, recap, or commentary after the final example.
+- Output ONLY the example blocks in the format above.
 
 {format_instructions}
 """

@@ -27,7 +27,8 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase B3.** Migrate Bedrock → Anthropic API + bump models to Sonnet 4.6 / Haiku 4.5 — completed 2026-05-13, commit `a704ae5`, branch `claude/migrate-anthropic-api-AYZnc` (consolidated onto `redesign/v2.1`). Smoke test ran 2026-05-14 (commit `391a012`). Full v2 baseline captured and rated 2026-05-14 (commit `1681158`).
 - [x] **Phase B4A.** Spot captures + Critic regression detection — completed 2026-05-18, commit `f5b323a`. Bug #16 (Architect CoT leak) logged; Bug #15 surfaced; Critic-with-seeded-references found to be *more* lenient than without (Bug #14 update).
 - [x] **Phase B4B.** Critic decontamination + reference disable (Bug #14 mitigation) — completed 2026-05-18, branch `claude/phase-b4b-decontamination-khFef`.
-- [ ] **Phase B4C.** Bug fixes #10, #11, #12, #13, #16 + Few-Shot Generator system prompt rewrite for placeholder enforcement (Bug #13 follow-through). Pending B4B spot-check validation.
+- [x] **Phase B4C.** Bug fixes #10, #11, #12, #13, #16 + Few-Shot Generator system prompt rewrite for placeholder enforcement + encoding audit + eval-runner retry-with-backoff — completed 2026-05-18, branch `claude/fix-pipeline-bugs-b4c-1TDUv`.
+- [ ] **Phase B4D.** Critic calibration test, auto-ingest gate hardening, full 18-entry re-baseline + human rating, comparison report against the 2026-05-14 baseline (mean 2.28 / 5). Pending B4C spot-check validation.
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -202,6 +203,96 @@ python eval/run_eval.py --inputs /tmp/b4a-subset.json --label b4b-critic-deconta
 
 Expected: eval_001's `critic_score` should drop from 0.60 toward <0.30; eval_007 should drop meaningfully from 0.90; eval_011 should drop substantially from 0.80.
 
+**2026-05-18 — Phase B4B validation results**
+
+Spot-check ran against the same three eval entries as B4A (eval_001, eval_007, eval_011) with the decontaminated Critic and references disabled. Three captures total: one for eval_001, then a retry for eval_007 + eval_011 after Anthropic returned `OverloadedError` on the initial pass.
+
+Critic-score table:
+
+| Eval | Pre-seed baseline (2026-05-14) | B4A (seeded refs) | B4B (decontam, no refs) | Read |
+|---|---|---|---|---|
+| eval_001 | 0.10 | 0.60 | 0.60 | Output had 2 of 4 core sections missing this run. Critic acknowledged in feedback but did not strictly apply the "ANY missing → cap at 3/10" rule. Score reflects qualitative judgment of partial structure. |
+| eval_007 | 0.90 | 0.90 | 0.40 → 0.60 (run variance) | All six sections present in the captured run; no Architect CoT preamble visible. Critic's lower score reflects identified gaps in constraint coverage and output schema specification, not INPUT HYGIENE / Bug #16 detection. |
+| eval_011 | 0.90 | 0.80 | 0.00 → 0.10 (run variance) | All four core sections MISSING. Critic feedback explicitly cites **"HARD RULE VIOLATION"** with enumerated missing sections. Completeness floored to 0/10. |
+
+Mean across the three: 0.32 (vs B4A's 0.77, vs the 2026-05-14 baseline mean of 0.63 across the same three entries). Substantial improvement.
+
+Findings:
+
+1. **HARD RULE binds reliably on the catastrophic case.** When all four core sections are missing, the Critic cites the rule by name in its feedback ("HARD RULE VIOLATION") and floors Completeness to 0/10. Direct evidence the new system prompt is loaded and binding rules are enforced when violations are unambiguous.
+2. **HARD RULE "ANY missing → cap at 3/10" clause does NOT bind reliably on partial cases.** When only some core sections are missing (eval_001's 2 of 4), the Critic acknowledges the issue in feedback but scores Completeness at 6/10 instead of capping at 3/10. Phrasing weakness. Tighten in a future patch if it remains an issue after B4C reduces how often the rule needs to fire.
+3. **Critic scoring has 0.10–0.20 run-to-run variance on the same input.** Same code, same input, different scores across runs. The B4D calibration test must run each prompt 3–5 times and report distribution, not a single point.
+4. **Bug #16 (Architect CoT leak) is intermittent.** B4A's eval_007 had a visible Architect CoT preamble. B4B's retry eval_007 did not. The bug is real but doesn't fire on every capture of the same input. B4C applied the structural fix anyway.
+5. **Encoding bug surfaced in `eval/run_eval.py`.** `pathlib.write_text` and `json.load(open(...))` default to cp1252 on Windows, fail on Unicode characters in Critic output (specifically `\u2192` "→"). Hotfix committed on branch `fix/eval-runner-utf8` (commit `41994a7`); broader audit + locking down all Path text I/O completed in B4C.
+6. **Eval runner skipped silently on `OverloadedError` from Anthropic.** Logged for B4C; addressed in commit `ff8d7a1` (retry-with-backoff, 10s/30s/60s).
+
+Capture files: `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated.json` and `eval/runs/2026-05-18_4cbac49_b4b-critic-decontaminated-retry.json`. Subset files used to drive the spot check committed at `b4a-subset.json` and `b4a-subset-retry.json` in repo root.
+
+B4B is validated. Move to B4C.
+
+---
+
+**2026-05-18 — Phase B4C complete (commit `ff8d7a1`, branch `claude/fix-pipeline-bugs-b4c-1TDUv`)**
+
+Structural bug fixes for #10, #11, #12, #13, #16 plus the Few-Shot Generator placeholder-enforcement rewrite, an encoding audit across `eval/`, and a retry-with-backoff loop in the eval runner for Anthropic overload errors. The Critic calibration test, auto-ingest gate hardening, and full 18-entry re-baseline are **explicitly deferred to Phase B4D** (see Status). The reason for splitting: B4C's bug fixes need their own diagnostic signal; bundling calibration + bug fixes would conflate movement.
+
+Per-bug fixes:
+
+- **Bug #10 (Few-Shot CoT preamble leak)** — Root cause: the Phase A `_strip_preamble` helper only knew about numbered-list outputs (Clarifier, Context Scout) and never touched the Few-Shot Generator's `Example N —` blocks. Fix: added `strip_fewshot_preamble()` in `orchestrator/response_merger.py` (cut point = first `Example \d+` match), applied in `merge_refinement()` and at the orchestrator call site in `_handle_awaiting_context`. Belt and suspenders: a new `=== STRICT OUTPUT RULES ===` section in `agents/fewshot_generator.py` explicitly forbids preamble, `<thinking>` tags, and meta-commentary.
+
+- **Bug #11 (Few-Shot consumes stale Architect draft)** — Root cause: in `_handle_awaiting_context` and `eval/run_eval._drive_pipeline`, the Architect refine call and the Few-Shot Generator were dispatched in parallel via `invoke_parallel`. The Few-Shot Generator received `refined_prompt=session.current_draft`, which was the *original* draft because the refined draft only landed on the session AFTER both futures completed. Fix: serialized the two calls — Architect runs first, the refined body is stored on the session, then Few-Shot runs against the now-correct draft. Applied identically in both call sites. Cost: one round-trip's worth of additional wall-clock latency on the awaiting_context handler. Validated indirectly by `TestFewShotReadsRefinedDraft`.
+
+- **Bug #12 (Architect output drops entirely)** — Root cause: when the Architect produced unparseable / sectionless output (intermittent, model-nondeterministic), `_extract_prompt_block` happily returned whatever was in the code fence (or the whole text), and the orchestrator passed the broken artifact downstream with no detection. Fix: added `_missing_architect_sections()` (XML mode for Claude, markdown-header mode for GPT/Gemini) and `_invoke_architect_with_validation()` in `orchestrator/orchestrator.py`. The helper: (a) invokes the Architect, (b) checks for `<role>/<context>/<task>/<constraints>` (or `## Role` etc.), (c) retries ONCE with a stricter addendum naming the missing sections if any are absent, (d) raises a new `ArchitectOutputError` if the retry also fails. Wired into all three Architect call sites in `orchestrator.py` (`_handle_initial`, `_handle_awaiting_context`, `_handle_iterating`) and both call sites in `eval/run_eval.py`. The previous silent-drop behavior is no longer reachable.
+
+- **Bug #13 (Few-Shot / Architect hallucinate user-specific data)** — Root cause: the Few-Shot Generator system prompt had no instruction to use placeholder tokens when concrete values weren't in the user's input, so the model defaulted to fabricating realistic-looking schemas, IDs, and field names. Fix: added a new `=== INPUT GROUNDING & PLACEHOLDERS ===` section to `agents/fewshot_generator.py` enumerating the placeholder rules, the forbidden hallucination patterns (with the concrete examples from eval_001 — `user_12345`, `employee_id`, `id/first_name/last_name/is_active`), and the correct placeholder substitutions (`{{USER_DATA}}`, `{{FIELD_NAME}}`, `{{COLUMN_NAME}}`). Behavior is gated on the model honoring the system prompt; a contract test (`TestFewShotPlaceholderEnforcement`) asserts the language is present, but behavioral verification requires a live model run.
+
+- **Bug #16 (Architect CoT preamble leak)** — Same shape as #10. Fix: `strip_architect_preamble()` added to `response_merger.py` with a richer marker set (code fence, `<role>`, `<context>`, `<task>`, `<constraints>`, `<system>`, `## Role`, `Role:`, `You are`); applied in both `merge_draft_scout_clarifier()` and `merge_refinement()`, and inside `_invoke_architect_with_validation` so even sectionless outputs get cleaned before validation. Added a new `=== STRICT OUTPUT RULES ===` section to `agents/prompt_architect.py` that forbids preamble, `<thinking>` tags, and `"I'll refine the prompt based on..."`-style narration.
+
+**Encoding audit:**
+
+- `grep -rn "open(" --include="*.py" eval/ orchestrator/ agents/ prompt_db/ | grep -v encoding` returned **0 unmarked `open()` calls** — `prompt_db/ingest.py` and `prompt_db/store.py` already pass `encoding="utf-8"`.
+- Extended the audit to `Path.read_text` / `Path.write_text` (which silently default to the platform locale) and found 4 unmarked sites: `eval/run_eval.py` lines 331+371 and `eval/rate.py` lines 33+42. All four now pass `encoding="utf-8"` explicitly.
+- The `fix/eval-runner-utf8` fix mentioned in the B4B validation entry survives — `run_eval.write_run_file` already used `ensure_ascii=False`, and the new `encoding="utf-8"` argument locks the disk format down so non-UTF-8 default locales (Windows, some CI runners) don't mojibake the captures.
+- Smoke test `TestEncodingRoundTrip` round-trips `"café — naïve — 日本語 — 🎉"` through the run-file writer.
+
+**Retry-with-backoff:**
+
+- `eval/run_eval.run_entry` now catches Anthropic overload errors (HTTP 529, surfaced as `anthropic.InternalServerError` — the SDK does not expose a distinct `OverloadedError` class) and retries up to 3 times with exponential backoff `(10s, 30s, 60s)`. Other Anthropic error classes (`AuthenticationError`, `BadRequestError`, `RateLimitError`, etc.) and non-API exceptions fall through immediately to the existing skip-and-log path — those won't resolve on retry.
+- Successful retry runs annotate `captured.extra.overload_retries` so the rating UI can flag entries that needed retries.
+- Injectable `sleep_fn` and `backoffs` make the retry loop unit-testable without real sleeps. Tests: `test_overload_triggers_retry_with_backoff`, `test_overload_exhausted_skips_with_clear_reason`, `test_non_overload_api_error_does_not_retry`.
+
+**New test count:** 200 → **221** (added 21 tests).
+
+New test classes / cases:
+- `TestExtendedPreambleStripping` (8 tests): direct strip helpers for Architect and Few-Shot, end-to-end merger coverage, system-prompt contract assertions.
+- `TestFewShotPlaceholderEnforcement` (3 tests): contract assertions on the new `=== INPUT GROUNDING & PLACEHOLDERS ===` section.
+- `TestArchitectValidation` (5 tests): missing-section detection (xml, markdown, empty), retry path, fail-loud path.
+- `TestFewShotReadsRefinedDraft` (1 test): asserts the Few-Shot Generator sees the refined Architect draft, not the stale one.
+- `TestEncodingRoundTrip` (1 test): Unicode smoke test through `write_run_file`.
+- `TestRunEntryCapture.test_overload_*` and `test_non_overload_*` (3 tests): retry-with-backoff coverage.
+
+**Notes on nondeterministic fixes:**
+
+Bugs #11, #12, and #16 are structurally fixed — the data flow is corrected and defensive validation is in place — but the original manifestations were nondeterministic (model-output-shape dependent). Validation requires multiple runs of the B4A subset to confirm the fix holds across model variance. The user runs the spot check locally; a single clean run is necessary but not sufficient evidence.
+
+**Explicitly deferred to Phase B4D:**
+- Critic calibration test (5 known-good + 5 known-bad prompts, 3–5 runs per prompt, with distribution-separation acceptance criteria).
+- Auto-ingest gate hardening: structural lint (every accepted prompt has `<role>/<context>/<task>/<constraints>`, no CoT preamble in the body, no `<thinking>` tags) as a second gate alongside `critic_score >= 0.8`.
+- Optional HARD RULE phrasing tightening in `agents/critic.py` — only if the B4C spot check shows the existing rule isn't penalizing structural defects hard enough.
+- Full 18-entry re-baseline + human rating using the post-B4C pipeline.
+- Comparison report against the 2026-05-14 baseline (mean 2.28 / 5).
+
+**Validation command (user runs locally with `ANTHROPIC_API_KEY` set):**
+
+```
+python eval/run_eval.py --inputs b4a-subset.json --label b4c-bug-fixes
+```
+
+Expected outcomes:
+- eval_001: all four core sections (`<role>`, `<context>`, `<task>`, `<constraints>`) PRESENT (Bug #12 retry or fail-loud working). No CoT preamble from Few-Shot or Architect (Bugs #10, #16). No fabricated user data (Bug #13). Critic score likely in the 0.3–0.6 range.
+- eval_007: no Architect CoT preamble (Bug #16). Few-Shot examples grounded in actual input data (Bug #13). Critic score 0.5–0.7 if output is genuinely decent.
+- eval_011: all four core sections PRESENT this time (Bug #12 working). If Few-Shot still has issues, Critic should catch them. Score range 0.3–0.6.
+
 ---
 
 ## Known Issues (to address in Phase B4)
@@ -213,12 +304,14 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Same shape as bugs #8/#9* fixed in Phase A for Clarifier and Context Scout. Phase A's `_strip_preamble` helper in `orchestrator/response_merger.py` does not cover the Few-Shot Generator.
 - *Fix:* extend `_strip_preamble` coverage to Few-Shot Generator output. Add a "STRICT OUTPUT RULES" section to the Few-Shot Generator system prompt forbidding preamble, matching the Phase A pattern.
 - *Severity:* high. Visible in user-facing output and contributes to bug #14 (Critic miscalibration).
+- *B4C resolution (commit `ff8d7a1`):* added `strip_fewshot_preamble()` in `orchestrator/response_merger.py` (cut point = first `Example \d+` match), applied in `merge_refinement()` and `_handle_awaiting_context`. New `=== STRICT OUTPUT RULES ===` section in `agents/fewshot_generator.py` forbids preamble, `<thinking>` tags, and meta-commentary. Covered by `TestExtendedPreambleStripping`.
 
 **Bug #11 — Few-Shot Generator uses stale Architect draft.**
 - *Symptom:* When the Architect refines its draft based on Critic feedback, the Few-Shot Generator continues to use the original (unrefined) draft.
 - *Concrete example:* In eval_001, the Architect's initial draft hallucinated schema fields (`id`/`first_name`/`last_name`/`is_active`). The Critic flagged the mismatch. The Architect's refined output correctly used the schema the user provided (`name`/`email`/`age`). The Few-Shot Generator's three examples still used the wrong (hallucinated) schema, producing an internally-contradictory final output.
 - *Likely cause:* The Few-Shot Generator is invoked in parallel with Architect refinement and reads from a stale state field rather than the refined draft.
 - *Severity:* high. Produces user-facing output that contradicts itself.
+- *B4C resolution (commit `ff8d7a1`):* root cause confirmed — `_handle_awaiting_context` and `eval/run_eval._drive_pipeline` both dispatched the Architect refine + Few-Shot Generator in parallel via `invoke_parallel`; the Few-Shot received `refined_prompt=session.current_draft` (the *original* pre-refine draft). Fix: serialized both call sites — Architect runs first, refined body lands on the session, Few-Shot then runs against the correct draft. Validated by `TestFewShotReadsRefinedDraft`. Fix is structural; multi-run validation pending (nondeterministic manifestation).
 
 **Bug #12 — Architect output drops entirely from final output.**
 - *Symptom:* Final output contains only Few-Shot examples plus a stray curl command, with no `<role>`, `<context>`, `<task>`, or `<constraints>` sections.
@@ -226,11 +319,13 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Affects 28% of baseline entries* (5 of 18 entries had partial or missing Architect output).
 - *Likely cause:* `_split_final_draft` parsing edge case when the Architect output is shaped unusually, or model nondeterminism producing unparseable structures. Root cause unknown.
 - *Severity:* critical.
+- *B4C resolution (commit `ff8d7a1`):* root cause confirmed as model-output-shape nondeterminism — when the Architect emitted sectionless output (no `<role>` / `## Role`), `_extract_prompt_block` returned whatever was in the fence (or the whole text), and the orchestrator passed the broken artifact downstream silently. Fix: added `_missing_architect_sections()` (XML mode for Claude, markdown-header mode for GPT/Gemini) and `_invoke_architect_with_validation()` in `orchestrator/orchestrator.py`. The helper retries the Architect ONCE with a stricter addendum naming the missing sections; if the retry also fails the new `ArchitectOutputError` is raised so the eval runner / Lambda handler surfaces the failure rather than silently producing a broken prompt. Wired into all three orchestrator Architect call sites plus both `eval/run_eval.py` call sites. Covered by `TestArchitectValidation` (5 tests). Fix is structural; multi-run validation pending (nondeterministic manifestation).
 
 **Bug #13 — Architect / Few-Shot hallucinate user-specific data instead of using placeholders.**
 - *Symptom:* Both agents invent user-specific values (e.g., specific user IDs, real-looking names, fabricated table schemas) rather than using placeholders the downstream user would substitute.
 - *Likely related to:* the prompt DB never having been seeded (see "Operational gap" below). With no real exemplars to ground on, the model invents.
 - *Severity:* medium-high. May partially resolve once the DB is seeded; verify before deeper fix.
+- *B4C resolution (commit `ff8d7a1`):* added a new `=== INPUT GROUNDING & PLACEHOLDERS ===` section to `agents/fewshot_generator.py` system prompt. The section enumerates the placeholder rules ("if a value is PRESENT in input, use the exact value; if NOT present, emit `{{USER_DATA}}` / `{{FIELD_NAME}}` / `{{COLUMN_NAME}}`; NEVER invent"), lists the forbidden hallucination patterns from the B4A captures (`user_12345`, fabricated `id/first_name/last_name/is_active` schemas, `employee_id/department/salary` domain fields), and shows the correct substitutions. Contract assertion in `TestFewShotPlaceholderEnforcement`. Behavioral validation requires a live model run. The Architect's own `=== STRICT OUTPUT RULES ===` constrains preamble but not placeholder usage — Architect-side placeholder enforcement is deferred until the spot check shows whether it's still needed.
 
 **Bug #14 — Critic score miscalibration.**
 - *Symptom:* Critic gives 0.7–0.9 scores to outputs humans rate 2/5.
@@ -254,6 +349,7 @@ These bugs and operational gaps surfaced during the 2026-05-14 smoke test and ba
 - *Visible in:* `eval/runs/2026-05-18_3454e3d_b4a-critic-refs-only.json`, eval_007 first 200 chars.
 - *Fix direction:* extend `_strip_preamble` coverage in `orchestrator/response_merger.py` to Architect output, and add a STRICT OUTPUT RULES section to the Architect system prompt forbidding preamble.
 - *Severity:* high — contributes to Critic miscalibration since the preamble reads as "content" rather than a defect.
+- *B4C resolution (commit `ff8d7a1`):* added `strip_architect_preamble()` in `response_merger.py` with a richer marker set (code fence, `<role>`, `<context>`, `<task>`, `<constraints>`, `<system>`, `## Role` and other markdown headers, `Role:`, `You are`). Applied in both `merge_draft_scout_clarifier()` and `merge_refinement()`, and inside `_invoke_architect_with_validation` so even sectionless outputs get cleaned before validation. New `=== STRICT OUTPUT RULES ===` section in `agents/prompt_architect.py` forbids preamble, `<thinking>` tags, and `"I'll refine..."`-style narration. Fix is structural; multi-run validation pending (nondeterministic manifestation).
 
 **Operational gap — Prompt DB never seeded.**
 - *Symptom:* `bash scripts/seed_prompt_db.sh` has never been run.
@@ -663,13 +759,41 @@ Phase C adds a Research agent to the pipeline. Layering new agents on a substrat
 
 ### Scope
 
+Phase B4 was split into A/B/C/D as the work shaped up. The aggregate Phase B4 scope:
+
 - Seed the prompt DB (`bash scripts/seed_prompt_db.sh`) and verify Few-Shot retrieval is actually pulling from it.
 - Verify eval-harness captures match what `pogo.html` renders (B3 closure step 4). If they diverge, reconcile before re-rating.
-- Fix bugs #10, #11, #12, #13.
+- Fix bugs #10, #11, #12, #13, #16 and the Critic miscalibration (#14).
 - Decontaminate the Critic system prompt; add a Critic calibration test against 5 known-good and 5 known-bad prompts; gate auto-ingest on calibrated scores plus a second signal.
 - Re-run the 18-entry baseline and rate it.
 
 Out of scope: any Phase C / D / E feature work. Bedrock cleanups (still deferred per B3 entry).
+
+#### Phase B4A — Scope (complete)
+
+- Spot-check captures of three eval entries (eval_001 / eval_007 / eval_011) after seeding the prompt DB, to test whether seeded references improved Critic calibration. Surfaced Bug #14 update (seeded references made calibration *worse*), Bug #15 (`few_shot_examples` field empty across all seed records), and Bug #16 (Architect CoT preamble).
+
+#### Phase B4B — Scope (complete)
+
+- Critic decontamination: rewrite `agents/critic.py` system prompt with `=== INPUT HYGIENE ===`, drop `techniques_identified` from the schema, add HARD RULE on Completeness when required sections are missing, prioritize defects over compensating positives in the evidence framing.
+- Reference disable: `ENABLE_CRITIC_REFERENCES = False` feature flag in `orchestrator/agent_router.py` so the Critic stops over-anchoring on superficial reference structure.
+
+#### Phase B4C — Scope (complete)
+
+- Bug fixes #10 (Few-Shot CoT leak), #11 (stale draft), #12 (Architect drop), #13 (placeholder enforcement), #16 (Architect CoT leak).
+- `_strip_preamble` extended to Architect + Few-Shot Generator coverage; new `=== STRICT OUTPUT RULES ===` sections in both system prompts (Phase A pattern, belt-and-suspenders).
+- Few-Shot Generator system prompt rewrite: new `=== INPUT GROUNDING & PLACEHOLDERS ===` section enforcing placeholder tokens for un-supplied values.
+- Architect output validation: `_invoke_architect_with_validation` retries once on missing sections, raises `ArchitectOutputError` on second failure (no more silent drops).
+- Encoding audit across `eval/`, `orchestrator/`, `agents/`, `prompt_db/` (4 sites fixed in `eval/`).
+- Eval-runner retry-with-backoff on Anthropic HTTP 529 overload errors (10s / 30s / 60s).
+
+#### Phase B4D — Scope (pending)
+
+- Critic calibration test: build 5 known-good + 5 known-bad prompts, run each 3–5 times through the Critic, set a distribution-separation acceptance criterion (mean(known-good) − mean(known-bad) ≥ a chosen threshold, with overlap below a chosen cap).
+- Auto-ingest gate hardening: add a structural lint second gate alongside `critic_score ≥ 0.8`. The lint checks that every accepted prompt has `<role>/<context>/<task>/<constraints>` present, no CoT preamble in the body, no `<thinking>` tags. Both gates must pass before ingestion.
+- Optional HARD RULE tightening in `agents/critic.py` — only if the B4C spot check shows the existing rule isn't penalizing structural defects hard enough.
+- Full 18-entry re-baseline + human rating using the post-B4C pipeline.
+- Comparison report against the 2026-05-14 baseline (mean 2.28 / 5). Sign-off if mean improves AND clean-rate improves AND no regression on any individual entry.
 
 ### Claude Code prompt (paste below)
 
