@@ -1,0 +1,29 @@
+[
+  {
+    "id": "eval_001",
+    "task_category": "code_generation",
+    "target_model_family": "claude",
+    "expected_path": "chained",
+    "user_prompt": "Build a small Flask web app that lets a user upload a CSV, validates the schema against a provided JSON spec, persists the rows to SQLite, and exposes a /search endpoint that returns matching rows as JSON.",
+    "pre_baked_context": "Schema spec is a JSON file with columns: name (string, required), email (string, required, RFC 5322), age (int, 0-120, optional). SQLite database lives at ./data/uploads.db. /search accepts ?name= and ?min_age= query params and returns up to 100 rows. No auth needed; this is for local use. Python 3.11, Flask 3.x, pytest for tests. Code should be production-shaped but pragmatic, not enterprise-grade.",
+    "notes": "Multi-component build (validation + persistence + API). Strong chained-path candidate because of the natural phase split: schema, ingest, API."
+  },
+  {
+    "id": "eval_007",
+    "task_category": "classification",
+    "target_model_family": "claude",
+    "expected_path": "one_shot",
+    "user_prompt": "Build a prompt that classifies inbound customer support tickets into urgency (low/medium/high/critical) and routing destination (billing, technical, account, other).",
+    "pre_baked_context": "Tickets are 1-3 sentence customer messages. The classifier should return JSON: {urgency, routing, confidence, reasoning}. Confidence is a float 0-1. Critical is reserved for outages affecting business operations or data loss. Examples must include at least one edge case (ambiguous routing).",
+    "notes": "Classification with structured output; one-shot."
+  },
+  {
+    "id": "eval_011",
+    "task_category": "translation",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "Translate product release notes from English to Brazilian Portuguese while preserving brand names, version numbers, and inline code identifiers verbatim.",
+    "pre_baked_context": "Source is markdown. Code spans (backticks) and code blocks must not be translated. Brand names: 'Snowdrift', 'Cascade', 'FlightDeck' — keep verbatim. Version strings like 'v2.3.1' verbatim. Target tone: professional but approachable, second person plural ('vocês') is fine. Preserve markdown structure exactly.",
+    "notes": "Translation with strict preserve-list and structural fidelity; one-shot."
+  }
+]
