@@ -342,9 +342,11 @@ def _result(message: str, render_blocks: list[dict[str, Any]]) -> dict[str, Any]
 
 def _extract_prompt_block(text: str) -> str:
     """Pull the content out of a markdown code fence, or return raw text."""
-    m = re.search(r"```(?:\w*)\n([\s\S]*?)```", text)
+    m = re.search(r"```(?:\w*)\n([\s\S]+)\n```[ \t]*(?:\n|$)", text)
     if m:
-        return m.group(1).strip()
+        extracted = m.group(1).strip()
+        if len(extracted) >= 20:
+            return extracted
     return text.strip()
 
 

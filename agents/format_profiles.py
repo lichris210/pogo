@@ -22,7 +22,7 @@ FORMAT_PROFILES: dict[str, dict] = {
             "Use role/persona framing to set reasoning style and tone.",
             "Put the immediate task near the end, after context.",
             "Prefill the assistant turn with an opening tag to steer output shape.",
-            "Chain-of-thought works well; ask the model to think step-by-step inside <thinking> tags.",
+            "Encourage step-by-step reasoning without XML tags — use plain-language instructions such as 'Think step by step before answering.'",
         ],
     },
     "gpt": {

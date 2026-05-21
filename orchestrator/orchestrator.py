@@ -187,6 +187,8 @@ def _invoke_architect_with_validation(
     if not missing:
         return raw, prompt_text
 
+    if os.environ.get("POGO_DEBUG"):
+        print(f"[orchestrator] Architect raw output (first 600 chars): {raw[:600]!r}")
     print(
         f"[orchestrator] Architect output missing sections "
         f"{missing}; retrying once with stricter instruction."
@@ -211,6 +213,8 @@ def _invoke_architect_with_validation(
     prompt_text2 = _extract_prompt_block(cleaned2)
     missing2 = _missing_architect_sections(prompt_text2, target_model)
     if missing2:
+        if os.environ.get("POGO_DEBUG"):
+            print(f"[orchestrator] Architect retry raw output (first 600 chars): {raw2[:600]!r}")
         raise ArchitectOutputError(
             "Prompt Architect produced an incomplete prompt after one "
             f"retry. Missing sections (target={target_model}): {missing2}. "
@@ -324,18 +328,22 @@ def _handle_awaiting_context(session: Session, message: str) -> dict:
     session.current_draft = refined_body
 
     # 3. Few-Shot Generator runs AFTER the Architect, with the refined draft.
-    reference_examples = fetch_fewshot_examples(
-        session.task_category, session.target_model, k=2
-    )
-    fs_msgs, fs_sys = fewshot_generator.build_messages(
-        refined_prompt=session.current_draft,
-        task_category=session.task_category,
-        format_profile=profile,
-        reference_examples=reference_examples,
-    )
-    fewshot_response = invoke_agent("fewshot_generator", fs_msgs, fs_sys)
-    fewshot_response = strip_fewshot_preamble(fewshot_response)
-    session.fewshot_examples = fewshot_response.strip()
+    if _fewshot_enabled():
+        reference_examples = fetch_fewshot_examples(
+            session.task_category, session.target_model, k=2
+        )
+        fs_msgs, fs_sys = fewshot_generator.build_messages(
+            refined_prompt=session.current_draft,
+            task_category=session.task_category,
+            format_profile=profile,
+            reference_examples=reference_examples,
+        )
+        fewshot_response = invoke_agent("fewshot_generator", fs_msgs, fs_sys)
+        fewshot_response = strip_fewshot_preamble(fewshot_response)
+        session.fewshot_examples = fewshot_response.strip()
+    else:
+        fewshot_response = ""
+        session.fewshot_examples = ""
 
     # 4. Guardrails
     gr = guardrails.check_prompt(session.current_draft, session.target_model)
@@ -480,8 +488,14 @@ def _ingest_accepted_prompt(session: Session, quality_score: float) -> bool:
 
 def _evaluate_review(session: Session, *, should_run_live_test: bool) -> dict:
     """Run the critic and optional live test, then build the review payload."""
+    from agents.guardrails import check_structural_integrity
     profile = format_profiles.FORMAT_PROFILES[session.target_model]
     final_prompt = _assemble_prompt_for_review(session)
+
+    struct_check = check_structural_integrity(final_prompt, session.target_model)
+    if not struct_check["passed"]:
+        defect_ids = [f["check"] for f in struct_check["findings"]]
+        return _error(422, f"Structural defects in assembled prompt: {defect_ids}")
 
     with ThreadPoolExecutor(max_workers=2 if should_run_live_test else 1) as pool:
         critic_future = pool.submit(
@@ -680,6 +694,15 @@ def _prompt_format(profile: dict) -> str:
 
 def _live_testing_enabled() -> bool:
     return os.environ.get("POGO_ENABLE_LIVE_TEST", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _fewshot_enabled() -> bool:
+    return os.environ.get("POGO_FEWSHOT_ENABLED", "false").strip().lower() not in {
         "0",
         "false",
         "no",

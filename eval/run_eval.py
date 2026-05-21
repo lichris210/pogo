@@ -164,12 +164,11 @@ def run_entry(
             elapsed = perf_counter() - attempt_started
             captured.elapsed_seconds = round(elapsed, 3)
             captured.token_count = tokens.total
-            captured.extra = {
-                "input_tokens": tokens.input,
-                "output_tokens": tokens.output,
-            }
+            # Merge token data without overwriting pipeline-set keys (e.g. structural_defects)
+            token_data: dict = {"input_tokens": tokens.input, "output_tokens": tokens.output}
             if attempt > 0:
-                captured.extra["overload_retries"] = attempt
+                token_data["overload_retries"] = attempt
+            captured.extra = {**token_data, **captured.extra}
             return captured
         except Exception as exc:  # noqa: BLE001
             if _is_overload_error(exc) and attempt < attempts_total - 1:
@@ -240,6 +239,7 @@ def _drive_pipeline(
     )
     from orchestrator.orchestrator import (
         _assemble_prompt_for_review,
+        _fewshot_enabled,
         _invoke_architect_with_validation,
     )
     from orchestrator.response_merger import strip_fewshot_preamble
@@ -297,25 +297,39 @@ def _drive_pipeline(
     )
     session.current_draft = refined_body
 
-    reference_examples = fetch_fewshot_examples(
-        session.task_category, target_model, k=2,
-    )
-    fs_msgs, fs_sys = fewshot_generator.build_messages(
-        refined_prompt=session.current_draft,
-        task_category=session.task_category,
-        format_profile=profile,
-        reference_examples=reference_examples,
-    )
-    fewshot_response = invoke_agent("fewshot_generator", fs_msgs, fs_sys)
-    fewshot_response = strip_fewshot_preamble(fewshot_response)
-    session.fewshot_examples = (fewshot_response or "").strip()
+    if _fewshot_enabled():
+        reference_examples = fetch_fewshot_examples(
+            session.task_category, target_model, k=2,
+        )
+        fs_msgs, fs_sys = fewshot_generator.build_messages(
+            refined_prompt=session.current_draft,
+            task_category=session.task_category,
+            format_profile=profile,
+            reference_examples=reference_examples,
+        )
+        fewshot_response = invoke_agent("fewshot_generator", fs_msgs, fs_sys)
+        fewshot_response = strip_fewshot_preamble(fewshot_response)
+        session.fewshot_examples = (fewshot_response or "").strip()
+    else:
+        session.fewshot_examples = ""
 
-    # Guardrails are part of the production flow; mirror it but don't abort
-    # on a warning — eval should still capture what the pipeline produced.
-    guardrails.check_prompt(session.current_draft, target_model)
-
-    # 3. Critic
+    # 3. Structural guardrail on the assembled final prompt — blocks Critic
+    # when pipeline defects are present (duplicate sections, <thinking>, etc.)
     final_prompt = _assemble_prompt_for_review(session)
+    struct_check = guardrails.check_structural_integrity(final_prompt, target_model)
+    if struct_check["errors"]:
+        for f in struct_check["findings"]:
+            print(f"[eval]   structural defect: {f['check']}: {f['message']}")
+        return CaptureResult(
+            architect_draft=architect_draft,
+            final_output=final_prompt,
+            error=f"structural defects: {[f['check'] for f in struct_check['findings']]}",
+            skipped=True,
+            skip_reason=f"structural defects blocked Critic: {struct_check['errors']}",
+            extra={"structural_defects": struct_check["findings"]},
+        )
+
+    # 4. Critic
     critic_result = run_critic_review(
         final_prompt,
         session.task_category,

@@ -759,6 +759,7 @@ class TestFewShotReadsRefinedDraft(unittest.TestCase):
 
     @patch("orchestrator.orchestrator.save_session")
     @patch("orchestrator.orchestrator.load_session")
+    @patch.dict("os.environ", {"POGO_FEWSHOT_ENABLED": "true"})
     def test_fewshot_receives_refined_draft_not_original(self, mock_load, mock_save):
         from orchestrator.orchestrator import handle_message
         from orchestrator.session import create_session
@@ -1466,6 +1467,184 @@ class TestInvokeParallel(unittest.TestCase):
             "response_from_agent_b",
             "response_from_agent_c",
         ])
+
+
+# ---------------------------------------------------------------------------
+# B4D — Few-Shot feature flag (POGO_FEWSHOT_ENABLED)
+# ---------------------------------------------------------------------------
+
+class TestFewshotFeatureFlag(unittest.TestCase):
+    """B4D: POGO_FEWSHOT_ENABLED defaults to False; the orchestrator must not
+    invoke the fewshot_generator agent when the flag is off."""
+
+    def _make_awaiting_context_session(self):
+        from orchestrator.session import create_session
+        session = create_session("u", "claude", "Analyze data")
+        session.state = "awaiting_context"
+        session.task_category = "data_analysis"
+        session.current_draft = (
+            "<role>analyst</role>\n<context>ctx</context>\n"
+            "<task>analyze</task>\n<constraints>none</constraints>"
+        )
+        return session
+
+    @patch("orchestrator.orchestrator.save_session")
+    @patch("orchestrator.orchestrator.load_session")
+    @patch.dict("os.environ", {"POGO_FEWSHOT_ENABLED": "false"})
+    def test_fewshot_not_invoked_when_flag_off(self, mock_load, mock_save):
+        """With POGO_FEWSHOT_ENABLED=false, invoke_agent must never be called
+        with 'fewshot_generator'."""
+        from orchestrator.orchestrator import handle_message
+
+        session = self._make_awaiting_context_session()
+        mock_load.return_value = session
+
+        refined = (
+            "```\n<role>analyst</role>\n<context>ctx</context>\n"
+            "<task>analyze</task>\n<constraints>none</constraints>\n```"
+        )
+        invoked_agents = []
+
+        def fake_invoke(agent_name, messages, system, **kwargs):
+            invoked_agents.append(agent_name)
+            if agent_name == "prompt_architect":
+                return refined
+            return "stub"
+
+        with patch("orchestrator.orchestrator.invoke_agent", side_effect=fake_invoke), \
+             patch("orchestrator.agent_router.invoke_agent", side_effect=fake_invoke):
+            event = {
+                "body": json.dumps({
+                    "session_id": session.session_id,
+                    "message": "Use type hints throughout",
+                    "target_model": "claude",
+                }),
+                "rawPath": "/optimize",
+            }
+            handle_message(event)
+
+        self.assertNotIn("fewshot_generator", invoked_agents)
+
+    @patch("orchestrator.orchestrator.save_session")
+    @patch("orchestrator.orchestrator.load_session")
+    @patch.dict("os.environ", {"POGO_FEWSHOT_ENABLED": "true"})
+    def test_fewshot_invoked_when_flag_on(self, mock_load, mock_save):
+        """With POGO_FEWSHOT_ENABLED=true, invoke_agent IS called with
+        'fewshot_generator'."""
+        from orchestrator.orchestrator import handle_message
+
+        session = self._make_awaiting_context_session()
+        mock_load.return_value = session
+
+        refined = (
+            "```\n<role>analyst</role>\n<context>ctx</context>\n"
+            "<task>analyze</task>\n<constraints>none</constraints>\n```"
+        )
+        invoked_agents = []
+
+        def fake_invoke(agent_name, messages, system, **kwargs):
+            invoked_agents.append(agent_name)
+            if agent_name == "prompt_architect":
+                return refined
+            if agent_name == "fewshot_generator":
+                return "Example 1 — typical\nInput: x\nOutput: y"
+            return "stub"
+
+        with patch("orchestrator.orchestrator.invoke_agent", side_effect=fake_invoke), \
+             patch("orchestrator.agent_router.invoke_agent", side_effect=fake_invoke):
+            event = {
+                "body": json.dumps({
+                    "session_id": session.session_id,
+                    "message": "Use type hints throughout",
+                    "target_model": "claude",
+                }),
+                "rawPath": "/optimize",
+            }
+            handle_message(event)
+
+        self.assertIn("fewshot_generator", invoked_agents)
+
+    @patch("orchestrator.orchestrator.save_session")
+    @patch("orchestrator.orchestrator.load_session")
+    @patch.dict("os.environ", {"POGO_FEWSHOT_ENABLED": "false"})
+    def test_session_fewshot_empty_when_flag_off(self, mock_load, mock_save):
+        """With POGO_FEWSHOT_ENABLED=false, session.fewshot_examples must be ''
+        after _handle_awaiting_context."""
+        from orchestrator import orchestrator as orch
+        from orchestrator.session import create_session
+
+        session = self._make_awaiting_context_session()
+
+        refined = (
+            "```\n<role>analyst</role>\n<context>ctx</context>\n"
+            "<task>analyze</task>\n<constraints>none</constraints>\n```"
+        )
+
+        with patch.object(orch, "invoke_agent", return_value=refined), \
+             patch.object(orch, "fetch_reference_prompts", return_value=[]), \
+             patch.object(orch, "fetch_fewshot_examples", return_value=[]), \
+             patch.object(orch, "save_session"), \
+             patch.object(orch, "run_critic_review", return_value={
+                 "response": "ok", "scores": {"overall": 7}, "suggestions": [],
+                 "reference_prompts": [],
+             }):
+            orch._handle_awaiting_context(session, "Use type hints")
+
+        self.assertEqual(session.fewshot_examples, "")
+
+
+# ---------------------------------------------------------------------------
+# B4D — _extract_prompt_block with nested code fences
+# ---------------------------------------------------------------------------
+
+class TestExtractPromptBlockNestedFence(unittest.TestCase):
+    """B4D: the greedy regex fix for _extract_prompt_block must correctly
+    extract prompt bodies that contain inner code fences (eval_011 root cause).
+    """
+
+    def test_nested_fence_outer_content_extracted(self):
+        """Outer fence containing inner ```markdown block → outer content returned."""
+        from orchestrator.response_merger import _extract_prompt_block
+        text = (
+            "```\n"
+            "## Role\nYou are a translator.\n\n"
+            "## Task\nTranslate the following:\n\n"
+            "```markdown\n"
+            "# Release Notes v2.3.1\n"
+            "- Fixed Snowdrift bug\n"
+            "```\n"
+            "\n"
+            "Preserve code spans verbatim.\n"
+            "```"
+        )
+        result = _extract_prompt_block(text)
+        self.assertIn("## Role", result)
+        self.assertIn("## Task", result)
+        self.assertIn("Snowdrift", result)
+        self.assertNotIn("```\n## Role", result)
+
+    def test_simple_fence_unchanged(self):
+        """Simple single-level fence → content extracted as before."""
+        from orchestrator.response_merger import _extract_prompt_block
+        text = "```\n<role>analyst</role>\n<task>analyze</task>\n```"
+        result = _extract_prompt_block(text)
+        self.assertIn("<role>", result)
+        self.assertIn("<task>", result)
+        self.assertNotIn("```", result)
+
+    def test_no_fence_returns_raw(self):
+        """Raw markdown without fences → returned as-is."""
+        from orchestrator.response_merger import _extract_prompt_block
+        text = "## Role\nYou are an analyst.\n\n## Task\nDo the analysis."
+        result = _extract_prompt_block(text)
+        self.assertIn("## Role", result)
+
+    def test_empty_inner_fallback(self):
+        """If greedy match yields < 20 chars, full text is returned."""
+        from orchestrator.response_merger import _extract_prompt_block
+        text = "```\nshort\n```"
+        result = _extract_prompt_block(text)
+        self.assertIn("short", result)
 
 
 if __name__ == "__main__":

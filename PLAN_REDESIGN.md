@@ -28,7 +28,8 @@ Full spec in `WORKFLOW_REDESIGN.md`.
 - [x] **Phase B4A.** Spot captures + Critic regression detection — completed 2026-05-18, commit `f5b323a`. Bug #16 (Architect CoT leak) logged; Bug #15 surfaced; Critic-with-seeded-references found to be *more* lenient than without (Bug #14 update).
 - [x] **Phase B4B.** Critic decontamination + reference disable (Bug #14 mitigation) — completed 2026-05-18, branch `claude/phase-b4b-decontamination-khFef`.
 - [x] **Phase B4C.** Bug fixes #10, #11, #12, #13, #16 + Few-Shot Generator system prompt rewrite for placeholder enforcement + encoding audit + eval-runner retry-with-backoff — completed 2026-05-18, branch `claude/fix-pipeline-bugs-b4c-1TDUv`.
-- [ ] **Phase B4D.** Critic calibration test, auto-ingest gate hardening, full 18-entry re-baseline + human rating, comparison report against the 2026-05-14 baseline (mean 2.28 / 5). Pending B4C spot-check validation.
+- [x] **Phase B4D.** Structural defenses + test layer — completed 2026-05-20, branch `claude/pogo-phase-b-completion-GofKz`.
+- [ ] **Phase B4E.** Critic calibration test, auto-ingest gate hardening, full 18-entry re-baseline + human rating, comparison report against the 2026-05-14 baseline (mean 2.28 / 5).
 - [ ] **Phase C.** Research agent expansion (autonomous discovery, references, summarization, conditional triggering)
 - [ ] **Phase D.** Decomposer agent + per-phase model recommendation + tier maps for each frontier family
 - [ ] **Phase E.** Per-phase RAG retrieval + per-phase ingestion + format profile inner-only scoping + phase plan assembly
@@ -275,11 +276,11 @@ New test classes / cases:
 
 Bugs #11, #12, and #16 are structurally fixed — the data flow is corrected and defensive validation is in place — but the original manifestations were nondeterministic (model-output-shape dependent). Validation requires multiple runs of the B4A subset to confirm the fix holds across model variance. The user runs the spot check locally; a single clean run is necessary but not sufficient evidence.
 
-**Explicitly deferred to Phase B4D:**
+**Explicitly deferred to Phase B4E** (formerly B4D — scope changed after B4C validation):
 - Critic calibration test (5 known-good + 5 known-bad prompts, 3–5 runs per prompt, with distribution-separation acceptance criteria).
-- Auto-ingest gate hardening: structural lint (every accepted prompt has `<role>/<context>/<task>/<constraints>`, no CoT preamble in the body, no `<thinking>` tags) as a second gate alongside `critic_score >= 0.8`.
-- Optional HARD RULE phrasing tightening in `agents/critic.py` — only if the B4C spot check shows the existing rule isn't penalizing structural defects hard enough.
-- Full 18-entry re-baseline + human rating using the post-B4C pipeline.
+- Auto-ingest gate hardening: `check_structural_integrity` as a second gate alongside `critic_score >= 0.8` (structural gate now exists; wiring into ingest path deferred).
+- Optional HARD RULE phrasing tightening in `agents/critic.py` — only if the B4E re-baseline shows the existing rule isn't penalizing structural defects hard enough.
+- Full 18-entry re-baseline + human rating using the post-B4D pipeline.
 - Comparison report against the 2026-05-14 baseline (mean 2.28 / 5).
 
 **Validation command (user runs locally with `ANTHROPIC_API_KEY` set):**
@@ -292,6 +293,28 @@ Expected outcomes:
 - eval_001: all four core sections (`<role>`, `<context>`, `<task>`, `<constraints>`) PRESENT (Bug #12 retry or fail-loud working). No CoT preamble from Few-Shot or Architect (Bugs #10, #16). No fabricated user data (Bug #13). Critic score likely in the 0.3–0.6 range.
 - eval_007: no Architect CoT preamble (Bug #16). Few-Shot examples grounded in actual input data (Bug #13). Critic score 0.5–0.7 if output is genuinely decent.
 - eval_011: all four core sections PRESENT this time (Bug #12 working). If Few-Shot still has issues, Critic should catch them. Score range 0.3–0.6.
+
+**2026-05-20 — Phase B4D complete (commit on `claude/pogo-phase-b-completion-GofKz`)**
+
+Structural defenses + test layer. B4C validation run (`eval/runs/2026-05-20_eecb37c_b4c-validation.json`) surfaced five structural defects; B4D fixed all five.
+
+- **Few-Shot Generator disabled (`POGO_FEWSHOT_ENABLED=false` default).** Evidence: eval_001's Architect draft already contained a rich `<examples>` block; Few-Shot appended a second generic block (2,746 chars, degraded specificity). eval_007's Architect had zero examples; Few-Shot produced nested invalid `<examples>` tags and a truncated Example 2. Decision: disable by default; re-enable post-Phase C when Architect-aware integration is built. Files: `orchestrator/orchestrator.py` (`_fewshot_enabled()` helper, fewshot gate in `_handle_awaiting_context`), `eval/run_eval.py` (same gate in `_drive_pipeline`).
+
+- **`<thinking>` format profile recommendation removed.** Root cause: `FORMAT_PROFILES["claude"]["best_practices"]` contained "Chain-of-thought works well; ask the model to think step-by-step inside `<thinking>` tags." This directly contradicted B4C's STRICT OUTPUT RULES prohibition in the Architect's system prompt; the explicit recommendation won. B4B addressed only the Critic's INPUT HYGIENE scoring penalty; B4C addressed only the Architect's *own* preamble CoT. Neither touched the format profile recommendation that told the Architect to generate `<thinking>` in the delivered prompt body. Fix: replaced with "Encourage step-by-step reasoning without XML tags — use plain-language instructions such as 'Think step by step before answering.'" File: `agents/format_profiles.py`.
+
+- **`_extract_prompt_block` greedy regex fix.** eval_011 (Gemini translation task) failed on both Architect attempts — non-greedy regex `[\s\S]*?` stopped at the first inner `` ```markdown `` fence inside the prompt, yielding an empty/partial extract where all four sections appeared "missing." Fix: greedy `[\s\S]+` with `\n```[ \t]*(?:\n|$)` anchor on the closing fence; greedy backtracking skips inner fences and stops at the outermost properly-terminated one. Added `< 20` char fallback to full raw text. File: `orchestrator/response_merger.py`.
+
+- **Structural guardrail gate added.** New `check_structural_integrity(prompt, target_model)` function in `agents/guardrails.py` (5 checks: `duplicate_section_tag`, `thinking_block`, `techniques_used_marker`, `unbalanced_xml_tag`, `truncated_example_tag`). Returns `{"passed": bool, "errors": list, "findings": list}`. Applied in `_evaluate_review` (orchestrator) returning HTTP 422 on defects, and in `_drive_pipeline` (eval harness) returning `CaptureResult(skipped=True)` with `extra["structural_defects"]`. Critic is only invoked on structurally clean prompts.
+
+- **Diagnostic logging added.** `POGO_DEBUG` env var gates logging of first 600 chars of raw Architect output on section-missing failures, to confirm/refute root-cause hypotheses on future runs.
+
+Files changed: `agents/format_profiles.py`, `agents/guardrails.py` (+`check_structural_integrity`), `orchestrator/orchestrator.py` (`_fewshot_enabled`, fewshot gate, structural gate, debug logging), `orchestrator/response_merger.py` (regex fix), `eval/run_eval.py` (fewshot gate, structural gate, extra-merge fix).
+
+New test files: `tests/test_structural_guardrails.py` (22 tests using B4C adversarial fixtures), `tests/test_format_profiles.py` (4 tests for `<thinking>` regression).
+
+Extensions: `tests/test_orchestrator.py` (+12 tests: `TestFewshotFeatureFlag`, `TestExtractPromptBlockNestedFence`; existing `TestFewShotReadsRefinedDraft` updated with `POGO_FEWSHOT_ENABLED=true` guard), `tests/test_eval_harness.py` (+2 tests: `TestStructuralGuardrailGate`).
+
+Test count: 221 → 256 (+35).
 
 ---
 
@@ -787,21 +810,58 @@ Out of scope: any Phase C / D / E feature work. Bedrock cleanups (still deferred
 - Encoding audit across `eval/`, `orchestrator/`, `agents/`, `prompt_db/` (4 sites fixed in `eval/`).
 - Eval-runner retry-with-backoff on Anthropic HTTP 529 overload errors (10s / 30s / 60s).
 
-#### Phase B4D — Scope (pending)
+#### Phase B4D — Completed 2026-05-20 (commit `eecb37c`, branch `claude/pogo-phase-b-completion-GofKz`)
 
-- Critic calibration test: build 5 known-good + 5 known-bad prompts, run each 3–5 times through the Critic, set a distribution-separation acceptance criterion (mean(known-good) − mean(known-bad) ≥ a chosen threshold, with overlap below a chosen cap).
-- Auto-ingest gate hardening: add a structural lint second gate alongside `critic_score ≥ 0.8`. The lint checks that every accepted prompt has `<role>/<context>/<task>/<constraints>` present, no CoT preamble in the body, no `<thinking>` tags. Both gates must pass before ingestion.
-- Optional HARD RULE tightening in `agents/critic.py` — only if the B4C spot check shows the existing rule isn't penalizing structural defects hard enough.
-- Full 18-entry re-baseline + human rating using the post-B4C pipeline.
+Five structural defects surfaced in the B4C validation run (`eval/runs/2026-05-20_eecb37c_b4c-validation.json`). B4D addressed all five.
+
+**Few-Shot Generator disabled (`POGO_FEWSHOT_ENABLED=false` default)**
+
+Evidence from two B4C captures:
+- eval_001: Architect draft already contained a rich `<examples>` block with custom sub-tags (`<example_schema_file>`, `<example_csv_invalid>`, `<example_search_request>`). Few-Shot Generator added 2,746 chars of generic "Example 1 / Example 2 / Example 3" content in a **second** `<examples>` block — degraded task specificity, added no value.
+- eval_007: Architect draft had zero examples. Few-Shot Generator produced Example 1 (complete) and Example 2 (truncated — Input only, no Output). Final prompt had two nested `<examples>` opening tags and one closing tag (structurally invalid).
+
+Decision: disable Few-Shot Generator via `POGO_FEWSHOT_ENABLED` (default `False`). Pipeline is now **Architect → Guardrails → Critic**. Re-enable post-Phase C when Architect-aware example integration is implemented. The `_assemble_prompt_for_review` append path must then detect an existing `<examples>` block and integrate into it rather than appending a second one.
+
+**`<thinking>` root cause analysis and fix**
+
+eval_007 `architect_draft` contained `<thinking>` inside `<task>`. Root cause: the Claude format profile's `best_practices` entry at `agents/format_profiles.py` explicitly recommended "Chain-of-thought works well; ask the model to think step-by-step inside `<thinking>` tags." This directly contradicted B4C's `=== STRICT OUTPUT RULES ===` prohibition in `agents/prompt_architect.py`. The explicit recommendation won over the generic prohibition.
+
+Why B4B and B4C didn't prevent it:
+- B4B (commit `950a022`) added an INPUT HYGIENE section to the **Critic** system prompt to *penalise* `<thinking>` blocks. It made no changes to the Architect or format profiles. The Critic should have penalised eval_007's `<thinking>` block but instead scored 9/10 — miscalibration on this edge case.
+- B4C (commit `ff8d7a1`) added STRICT OUTPUT RULES to the **Architect** system prompt, which the Architect interpreted as forbidding its *own* CoT preamble. The format profile's recommendation to generate `<thinking>` for the *target model's* chain-of-thought remained intact and unambiguous.
+
+Fix: replaced the `<thinking>` recommendation in `FORMAT_PROFILES["claude"]["best_practices"]` with "Encourage step-by-step reasoning without XML tags — use plain-language instructions such as 'Think step by step before answering.'"
+
+**`_extract_prompt_block` regex fix (eval_011 root cause)**
+
+eval_011 (Gemini translation task) failed on both Architect attempts with "Missing sections: ['role', 'context', 'task', 'constraints']". Root cause: `_extract_prompt_block` in `orchestrator/response_merger.py` used a non-greedy regex `[\s\S]*?` that stops at the first inner `` ``` `` inside the content. The Gemini prompt for a translation task likely includes an inner `` ```markdown `` block (sample release notes). Non-greedy match stops there, yields empty/partial extract, all four sections "missing." Both retry attempts fail identically.
+
+Fix: changed to greedy `[\s\S]+` with a `\n```[ \t]*(?:\n|$)` anchor on the closing fence, so greedy backtracking skips inner fences and stops at the outermost properly-terminated one. Added < 20 char fallback to raw text.
+
+**Structural guardrail gate added**
+
+New `check_structural_integrity(prompt, target_model)` function in `agents/guardrails.py` (5 checks: `duplicate_section_tag`, `thinking_block`, `techniques_used_marker`, `unbalanced_xml_tag`, `truncated_example_tag`). Applied in `_evaluate_review` (orchestrator) and `_drive_pipeline` (eval harness) after assembly and before Critic invocation. Structurally defective prompts are blocked; Critic is only invoked on clean prompts.
+
+**Files changed:** `agents/format_profiles.py`, `agents/guardrails.py`, `orchestrator/orchestrator.py`, `orchestrator/response_merger.py`, `eval/run_eval.py`.
+
+**New test files:** `tests/test_structural_guardrails.py` (22 tests), `tests/test_format_profiles.py` (4 tests).
+
+**Extensions:** `tests/test_orchestrator.py` (+12 tests: `TestFewshotFeatureFlag`, `TestExtractPromptBlockNestedFence`), `tests/test_eval_harness.py` (+2 tests: `TestStructuralGuardrailGate`).
+
+**Test count:** 221 → 256 (+35).
+
+#### Phase B4E — Scope (pending)
+
+- Critic calibration test: build 5 known-good + 5 known-bad prompts, run each 3–5 times through the Critic, set a distribution-separation acceptance criterion (mean(known-good) − mean(known-bad) ≥ chosen threshold, overlap below chosen cap).
+- Auto-ingest gate hardening: add `check_structural_integrity` as a second gate alongside `critic_score ≥ 0.8`. Both gates must pass before ingestion.
+- Optional HARD RULE tightening in `agents/critic.py` — only if re-baseline shows the existing rule still doesn't penalize structural defects hard enough.
+- Full 18-entry re-baseline + human rating using the post-B4D pipeline.
 - Comparison report against the 2026-05-14 baseline (mean 2.28 / 5). Sign-off if mean improves AND clean-rate improves AND no regression on any individual entry.
-
-### Claude Code prompt (paste below)
-
-*To be drafted.*
 
 ### Acceptance criteria for Phase B4
 
-*To be specified when the prompt is drafted. Will include: prompt DB seeded and verified, all four bugs fixed with regression tests, Critic calibration test passing, harness/UI parity confirmed, re-baseline captured and rated, mean score improvement documented.*
+- B4D: ✅ `captured_count: 3, skipped_count: 0` on `eval/b4c-subset.json`; no structural defects in captured results; all 256 tests pass.
+- B4E: Critic calibration test passing; re-baseline captured and rated; mean score improvement documented.
 
 ---
 

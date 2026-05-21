@@ -341,5 +341,73 @@ class TestValidateScore(unittest.TestCase):
                 rate.validate_score(bad)
 
 
+# ---------------------------------------------------------------------------
+# B4D — Structural guardrail gate in the eval harness
+# ---------------------------------------------------------------------------
+
+class TestStructuralGuardrailGate(unittest.TestCase):
+    """B4D: _drive_pipeline must run check_structural_integrity on the assembled
+    prompt after the Architect step and before running the Critic.  When defects
+    are found the entry is skipped and run_critic_review is NOT called."""
+
+    _ENTRY = {
+        "id": "eval_structural",
+        "task_category": "code_generation",
+        "target_model_family": "claude",
+        "expected_path": "one_shot",
+        "user_prompt": "Write a sorting function.",
+        "pre_baked_context": "Use Python, return a list.",
+        "notes": "",
+    }
+
+    def test_structural_check_blocks_critic(self):
+        """When check_structural_integrity returns errors, run_critic_review is
+        NOT called, result is skipped, and extra['structural_defects'] is set."""
+        defect_finding = {
+            "check": "thinking_block",
+            "message": "<thinking> found in prompt",
+        }
+        bad_struct = {
+            "passed": False,
+            "errors": ["<thinking> found in prompt"],
+            "findings": [defect_finding],
+        }
+
+        with run_eval._dry_run_patch(), patch(
+            "agents.guardrails.check_structural_integrity",
+            return_value=bad_struct,
+        ), patch(
+            "orchestrator.agent_router.run_critic_review",
+        ) as mock_critic:
+            result = run_eval.run_entry(self._ENTRY)
+
+        mock_critic.assert_not_called()
+        self.assertTrue(result.skipped)
+        self.assertIn("structural defects", result.skip_reason)
+        self.assertIn("structural_defects", result.extra)
+        self.assertEqual(result.extra["structural_defects"], [defect_finding])
+
+    def test_clean_prompt_proceeds_to_critic(self):
+        """When check_structural_integrity passes, run_critic_review IS called."""
+        clean_struct = {"passed": True, "errors": [], "findings": []}
+
+        with run_eval._dry_run_patch(), patch(
+            "agents.guardrails.check_structural_integrity",
+            return_value=clean_struct,
+        ), patch(
+            "orchestrator.agent_router.run_critic_review",
+            return_value={
+                "response": "ok",
+                "scores": {"overall": 7},
+                "suggestions": [],
+                "reference_prompts": [],
+            },
+        ) as mock_critic:
+            result = run_eval.run_entry(self._ENTRY)
+
+        mock_critic.assert_called_once()
+        self.assertFalse(result.skipped, msg=f"unexpected skip: {result.skip_reason}")
+
+
 if __name__ == "__main__":
     unittest.main()

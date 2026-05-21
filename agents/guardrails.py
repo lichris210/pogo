@@ -457,6 +457,144 @@ def _suggest_one(finding: dict, prompt: str) -> str:
     return f"Review and revise: {message}"
 
 
+# ---------------------------------------------------------------------------
+# Structural integrity checks — pipeline-integrity gates, not quality checks.
+# ---------------------------------------------------------------------------
+
+# Top-level XML section tags that must appear at most once in a delivered prompt.
+_XML_SECTION_TAGS = ("examples", "role", "context", "task", "constraints", "output_format")
+
+# The same sections as markdown headers (Gemini/GPT targets).
+_MARKDOWN_SECTION_NAMES = ("examples", "role", "context", "task", "constraints", "output_format")
+
+# XML section tags whose balance is verified (opening count == closing count).
+_BALANCED_TAG_NAMES = (
+    "role", "context", "task", "constraints", "output_format",
+    "examples", "example", "system",
+)
+
+# Pattern matching self-closing tags like <tag /> — excluded from balance counts.
+_SELF_CLOSING_RE = re.compile(r"<(\w+)\s*/>", re.IGNORECASE)
+
+
+def _count_xml_openings(tag: str, text: str) -> int:
+    """Count non-self-closing opening tags for *tag* in *text*."""
+    openings = len(re.findall(rf"<{tag}\b[^/>]*>", text, re.IGNORECASE))
+    return openings
+
+
+def _count_xml_closings(tag: str, text: str) -> int:
+    """Count closing tags for *tag* in *text*."""
+    return len(re.findall(rf"</{tag}>", text, re.IGNORECASE))
+
+
+def _run_structural_checks(prompt: str, target_model: str) -> list[dict]:
+    """Run structural integrity checks and return a list of finding dicts."""
+    findings: list[dict] = []
+
+    def _add(check: str, message: str) -> None:
+        findings.append({"severity": "error", "check": check, "message": message})
+
+    stripped = prompt.strip()
+    profile = {}
+    try:
+        from agents.format_profiles import FORMAT_PROFILES
+        profile = FORMAT_PROFILES.get(target_model, {})
+    except Exception:
+        pass
+    wrapper = profile.get("wrapper_format", "markdown")
+
+    # --- Duplicate top-level section tags ------------------------------------------
+    if wrapper == "xml":
+        for tag in _XML_SECTION_TAGS:
+            count = _count_xml_openings(tag, stripped)
+            if count > 1:
+                _add(
+                    "duplicate_section_tag",
+                    f"Duplicate <{tag}> section: found {count} opening tags "
+                    f"(expected at most 1). Pipeline merger produced a structural defect.",
+                )
+    else:
+        for name in _MARKDOWN_SECTION_NAMES:
+            matches = re.findall(
+                rf"(?im)^\s*#+\s*{name}\b", stripped
+            )
+            if len(matches) > 1:
+                _add(
+                    "duplicate_section_tag",
+                    f"Duplicate '## {name.title()}' section: found {len(matches)} headers "
+                    f"(expected at most 1).",
+                )
+
+    # --- <thinking> block anywhere -------------------------------------------------
+    if re.search(r"<thinking\b", stripped, re.IGNORECASE):
+        _add(
+            "thinking_block",
+            "<thinking> tag detected in the delivered prompt body. "
+            "This is a pipeline-leakage defect: the Architect should not generate "
+            "<thinking> blocks in prompts intended for the target model.",
+        )
+
+    # --- "Techniques Used:" marker -------------------------------------------------
+    if re.search(r"\*{0,2}Techniques Used\*{0,2}\s*:", stripped, re.IGNORECASE):
+        _add(
+            "techniques_used_marker",
+            "\"Techniques Used:\" marker found in the delivered prompt. "
+            "This is the Architect's meta-commentary and must not appear in the "
+            "final prompt body (indicates _extract_prompt_block failed to strip it).",
+        )
+
+    # --- Unbalanced XML tags -------------------------------------------------------
+    for tag in _BALANCED_TAG_NAMES:
+        opens = _count_xml_openings(tag, stripped)
+        closes = _count_xml_closings(tag, stripped)
+        if opens != closes:
+            _add(
+                "unbalanced_xml_tag",
+                f"Unbalanced <{tag}> tags: {opens} opening vs {closes} closing. "
+                "The prompt body has unclosed or orphaned XML section tags.",
+            )
+
+    # --- Truncated <example> tag (empty content) -----------------------------------
+    for m in re.finditer(r"<example>([\s\S]*?)</example>", stripped, re.IGNORECASE):
+        if not m.group(1).strip():
+            _add(
+                "truncated_example_tag",
+                "<example> tag has empty content. A truncated or placeholder "
+                "example block was emitted by the pipeline.",
+            )
+
+    return findings
+
+
+def check_structural_integrity(prompt: str, target_model: str) -> dict:
+    """Run structural-integrity checks against a delivered prompt.
+
+    These are pipeline-integrity gates, not content-quality checks.  They run
+    on the fully-assembled final prompt (after Few-Shot integration) immediately
+    before the Critic is invoked.  A failed check means the pipeline produced a
+    structurally defective artifact — not that the user wrote a poor prompt.
+
+    Args:
+        prompt: The assembled final prompt text to validate.
+        target_model: One of ``"claude"``, ``"gpt"``, or ``"gemini"``.
+
+    Returns:
+        A dict with:
+        - ``passed`` (bool): ``True`` if there are no structural errors.
+        - ``errors`` (list[str]): Messages for every error found.
+        - ``findings`` (list[dict]): Full structured findings; each dict has
+          keys ``severity`` (always ``"error"``), ``check``, and ``message``.
+    """
+    findings = _run_structural_checks(prompt, target_model)
+    errors = [f["message"] for f in findings]
+    return {
+        "passed": len(errors) == 0,
+        "errors": errors,
+        "findings": findings,
+    }
+
+
 def suggest_fixes(findings: list[dict], prompt: str) -> list[str]:
     """Generate a concrete, actionable fix suggestion for each finding.
 
