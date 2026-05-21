@@ -302,7 +302,7 @@ Structural defenses + test layer. B4C validation run (`eval/runs/2026-05-20_eecb
 
 - **`<thinking>` format profile recommendation removed.** Root cause: `FORMAT_PROFILES["claude"]["best_practices"]` contained "Chain-of-thought works well; ask the model to think step-by-step inside `<thinking>` tags." This directly contradicted B4C's STRICT OUTPUT RULES prohibition in the Architect's system prompt; the explicit recommendation won. B4B addressed only the Critic's INPUT HYGIENE scoring penalty; B4C addressed only the Architect's *own* preamble CoT. Neither touched the format profile recommendation that told the Architect to generate `<thinking>` in the delivered prompt body. Fix: replaced with "Encourage step-by-step reasoning without XML tags — use plain-language instructions such as 'Think step by step before answering.'" File: `agents/format_profiles.py`.
 
-- **`_extract_prompt_block` greedy regex fix.** eval_011 (Gemini translation task) failed on both Architect attempts — non-greedy regex `[\s\S]*?` stopped at the first inner `` ```markdown `` fence inside the prompt, yielding an empty/partial extract where all four sections appeared "missing." Fix: greedy `[\s\S]+` with `\n```[ \t]*(?:\n|$)` anchor on the closing fence; greedy backtracking skips inner fences and stops at the outermost properly-terminated one. Added `< 20` char fallback to full raw text. File: `orchestrator/response_merger.py`.
+- **`_extract_prompt_block` fully fixed (startswith guard + greedy regex).** eval_011 (Gemini translation task) failed across B4C and the initial B4D commit. Root cause (confirmed via `POGO_DEBUG=1` capture): the Architect's Gemini output starts directly with `## Role` — no outer code fence — but contains inner `` ```markdown `` / `` ```bash `` fences in the `## Example` section. The old non-greedy regex (B4C) stopped at the first inner closing fence; the greedy regex (initial B4D commit) extracted a larger inner fragment but still not the full prompt. Real invariant: fence extraction should only apply when the response *is* fence-wrapped. Fix: guard `if not text.strip().startswith("```"): return text.strip()` — Gemini/GPT responses that start with `## Role` are returned as-is; fence extraction runs only for Claude-target responses that actually begin with a fence. Greedy regex + `< 20` char fallback retained for the fence-wrapped path. Confirmed by re-running eval with captured fixture (`tests/fixtures/eval_011_architect_raw.txt`). Files: `orchestrator/response_merger.py`, `tests/fixtures/eval_011_architect_raw.txt`, `tests/test_response_merger.py` (new, 10 tests in `TestExtractPromptBlockEval011Regression` + `TestExtractPromptBlockExistingBehaviour`).
 
 - **Structural guardrail gate added.** New `check_structural_integrity(prompt, target_model)` function in `agents/guardrails.py` (5 checks: `duplicate_section_tag`, `thinking_block`, `techniques_used_marker`, `unbalanced_xml_tag`, `truncated_example_tag`). Returns `{"passed": bool, "errors": list, "findings": list}`. Applied in `_evaluate_review` (orchestrator) returning HTTP 422 on defects, and in `_drive_pipeline` (eval harness) returning `CaptureResult(skipped=True)` with `extra["structural_defects"]`. Critic is only invoked on structurally clean prompts.
 
@@ -310,11 +310,14 @@ Structural defenses + test layer. B4C validation run (`eval/runs/2026-05-20_eecb
 
 Files changed: `agents/format_profiles.py`, `agents/guardrails.py` (+`check_structural_integrity`), `orchestrator/orchestrator.py` (`_fewshot_enabled`, fewshot gate, structural gate, debug logging), `orchestrator/response_merger.py` (regex fix), `eval/run_eval.py` (fewshot gate, structural gate, extra-merge fix).
 
-New test files: `tests/test_structural_guardrails.py` (22 tests using B4C adversarial fixtures), `tests/test_format_profiles.py` (4 tests for `<thinking>` regression).
+New test files: `tests/test_structural_guardrails.py` (22 tests using B4C adversarial fixtures), `tests/test_format_profiles.py` (4 tests for `<thinking>` regression), `tests/test_response_merger.py` (10 tests: eval_011 regression guard + existing-behaviour contracts), `tests/fixtures/eval_011_architect_raw.txt` (3,811-char Gemini translation prompt fixture).
 
 Extensions: `tests/test_orchestrator.py` (+12 tests: `TestFewshotFeatureFlag`, `TestExtractPromptBlockNestedFence`; existing `TestFewShotReadsRefinedDraft` updated with `POGO_FEWSHOT_ENABLED=true` guard), `tests/test_eval_harness.py` (+2 tests: `TestStructuralGuardrailGate`).
 
-Test count: 221 → 256 (+35).
+Test count: 221 → 266 (+45).
+
+**Deferred to Phase B4E:**
+- *`## Techniques Used` guardrail gap.* The Guardrails `techniques_used_marker` check matches the pattern `\*{0,2}Techniques Used\*{0,2}\s*:` (plain text or bold, with colon — the XML-target Architect form). The Gemini Architect emits `## Techniques Used` (markdown section header, no colon). The current check does not fire on the markdown form. A Gemini Architect output that leaks a `## Techniques Used` section will pass the structural gate. Fix in Phase E: extend the regex to also match `#+\s*Techniques Used` (header form, no colon required).
 
 ---
 

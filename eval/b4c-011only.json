@@ -1,0 +1,11 @@
+[
+  {
+    "id": "eval_011",
+    "task_category": "translation",
+    "target_model_family": "gemini",
+    "expected_path": "one_shot",
+    "user_prompt": "Translate product release notes from English to Brazilian Portuguese while preserving brand names, version numbers, and inline code identifiers verbatim.",
+    "pre_baked_context": "Source is markdown. Code spans (backticks) and code blocks must not be translated. Brand names: 'Snowdrift', 'Cascade', 'FlightDeck' — keep verbatim. Version strings like 'v2.3.1' verbatim. Target tone: professional but approachable, second person plural ('vocês') is fine. Preserve markdown structure exactly.",
+    "notes": "Translation with strict preserve-list and structural fidelity; one-shot."
+  }
+]

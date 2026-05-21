@@ -341,13 +341,22 @@ def _result(message: str, render_blocks: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def _extract_prompt_block(text: str) -> str:
-    """Pull the content out of a markdown code fence, or return raw text."""
-    m = re.search(r"```(?:\w*)\n([\s\S]+)\n```[ \t]*(?:\n|$)", text)
+    """Pull the content out of a markdown code fence, or return raw text.
+
+    Only attempts fence extraction when the response *starts* with a fence.
+    If the text begins directly with content (e.g. ``## Role`` for Gemini/GPT
+    targets), it is already the prompt body — scanning for an inner fence
+    would grab an embedded example block instead of the full prompt.
+    """
+    text_stripped = text.strip()
+    if not text_stripped.startswith("```"):
+        return text_stripped
+    m = re.search(r"```(?:\w*)\n([\s\S]+)\n```[ \t]*(?:\n|$)", text_stripped)
     if m:
         extracted = m.group(1).strip()
         if len(extracted) >= 20:
             return extracted
-    return text.strip()
+    return text_stripped
 
 
 def _extract_after(text: str, heading: str) -> str:
